@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from uuid import UUID
 
 from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
@@ -13,6 +14,7 @@ from app.config import Settings
 from app.events import EventBus
 from app.peer import Peer
 from app.repositories import sessions as repo
+from app.repositories.visitors import save_web_visitor
 from app.schemas import (
     ChatEvent,
     EngineAttachOut,
@@ -24,6 +26,7 @@ from app.schemas import (
     StateOut,
     StatsOut,
     StopOut,
+    VisitorOut,
 )
 
 Outbox = list[tuple[Peer, ChatEvent]]
@@ -130,6 +133,16 @@ class ChatService:
         if phase == "searching" and self._engine_enabled:
             await self._events.request_engine()
         return StateOut(phase=phase)
+
+    async def save_web_visitor(
+        self,
+        visitor_id: UUID | None,
+        bot_key: str,
+        user_id: int | None = None,
+    ) -> VisitorOut:
+        async with self._pool.connection() as conn:
+            saved = await save_web_visitor(conn, visitor_id, bot_key.strip(), user_id)
+        return VisitorOut(id=saved.id, user_id=saved.user_id, created=saved.created)
 
     async def visit(self, peer: Peer, handle: str | None = None) -> None:
         async with self._pool.connection() as conn:

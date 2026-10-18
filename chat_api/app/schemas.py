@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -12,6 +13,23 @@ LeftReason = Literal["stopped", "reported", "undeliverable"]
 
 class StateOut(BaseModel):
     phase: Phase = Field(description="`idle` — вне чата, `searching` — в очереди, `chatting` — в диалоге")
+
+
+class VisitorIn(BaseModel):
+    id: UUID | None = Field(default=None, description="Кука iskra_id, если браузер её уже прислал")
+    bot_key: str = Field(default="site", min_length=1, max_length=64, description="Ключ сайта, как в адресе peer")
+    user_id: int | None = Field(
+        default=None,
+        gt=0,
+        le=2**48 - 1,
+        description="Гость чата, к которому воркер привязывает новую куку",
+    )
+
+
+class VisitorOut(BaseModel):
+    id: UUID = Field(description="Кука, которую нужно оставить браузеру")
+    user_id: int = Field(description="Пользователь web в bot_users")
+    created: bool = Field(description="True, если эта кука записана впервые")
 
 
 class VisitIn(BaseModel):

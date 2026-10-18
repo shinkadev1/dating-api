@@ -303,6 +303,36 @@ CREATE INDEX IF NOT EXISTS bot_users_last_seen_idx ON bot_users (last_seen_at);
 CREATE INDEX IF NOT EXISTS user_channels_channel_idx ON user_channels (channel_id);
 CREATE INDEX IF NOT EXISTS engine_presence_last_seen_idx ON engine_presence (last_seen_at);
 
+-- Кука сайта. id живёт в браузере, user_id — тот же человек в bot_users (platform = web).
+CREATE TABLE IF NOT EXISTS web_visitors (
+    id UUID PRIMARY KEY,
+    platform TEXT NOT NULL DEFAULT 'web' CHECK (platform = 'web'),
+    user_id BIGINT NOT NULL UNIQUE,
+    visits INTEGER NOT NULL DEFAULT 1,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (platform, user_id)
+);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'web_visitors_user_fk'
+    ) THEN
+        ALTER TABLE web_visitors
+            ADD CONSTRAINT web_visitors_user_fk
+            FOREIGN KEY (platform, user_id)
+            REFERENCES bot_users (platform, user_id);
+    END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS web_visitors_last_seen_idx ON web_visitors (last_seen_at);
+
+COMMENT ON TABLE web_visitors IS 'Посетители сайта: кука iskra_id и пользователь web';
+COMMENT ON COLUMN web_visitors.id IS 'Значение куки iskra_id';
+COMMENT ON COLUMN web_visitors.visits IS 'Сколько раз сайт представил эту куку';
+COMMENT ON COLUMN web_visitors.last_seen_at IS 'Последний заход на сайт, не признак онлайна в чате';
+
 COMMENT ON COLUMN chat_sessions.partner_id IS 'С кем пользователь сейчас говорит';
 COMMENT ON COLUMN chat_sessions.searching_since IS 'Когда пользователь встал в очередь поиска';
 COMMENT ON COLUMN chat_sessions.platform IS 'vk, tg, web или engine — аккаунт chat-engine вместо живого собеседника';
