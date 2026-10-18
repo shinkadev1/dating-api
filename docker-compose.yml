@@ -1,7 +1,7 @@
-# Chat API, бот ВК, мост к chat-engine, Redis, база Supabase Postgres и панель Studio.
-# Бот Telegram на проде работает на сервере chat-engine (tg_bot/docker-compose.yml).
+# Chat API, мост к chat-engine, Redis, база Supabase Postgres и панель Studio.
+# Бот ВК — репозиторий dating-bot-vk, бот Telegram — dating-bot-tg.
 # Локально: docker compose up --build
-# Локально бот Telegram и мост: COMPOSE_PROFILES=telegram,engine docker compose up --build
+# Локально мост: COMPOSE_PROFILES=engine docker compose up --build
 # На сервере CI подставляет образы из Docker Hub, сборки нет.
 # Chat API: http://127.0.0.1:8000/docs
 # На сервере Studio и Chat API открыты наружу только через cloudflared (профиль proxy).
@@ -90,40 +90,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
-
-  # Бот ВК: отдельный контейнер, с Chat API общается только по HTTP и через Redis Streams.
-  bot:
-    image: ${BOT_IMAGE:-dating-bot:local}
-    build: ./vk_bot
-    container_name: vk-bot
-    restart: unless-stopped
-    environment:
-      VK_TOKEN: ${VK_TOKEN:-}
-      VK_TOKENS: ${VK_TOKENS:-}
-      CHAT_API_SERVICE_TOKEN: ${CHAT_API_SERVICE_TOKEN:?Задайте CHAT_API_SERVICE_TOKEN в .env}
-      CHAT_API_URL: http://chat-api:8000
-      REDIS_URL: redis://redis:6379/0
-    depends_on:
-      chat-api:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  # Бот Telegram для локальной разработки (профиль telegram).
-  # На проде он работает на сервере chat-engine: tg_bot/docker-compose.yml.
-  tg-bot:
-    image: dating-tg-bot:local
-    build: ./tg_bot
-    container_name: vk-tg-bot
-    profiles: ["telegram"]
-    restart: unless-stopped
-    environment:
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      CHAT_API_TG_TOKEN: ${CHAT_API_TG_TOKEN:-}
-      CHAT_API_URL: http://chat-api:8000
-    depends_on:
-      chat-api:
-        condition: service_healthy
 
   # Собеседники из chat-engine (bots.chatwithyou.site), когда живых в очереди нет. Профиль engine.
   engine-bridge:

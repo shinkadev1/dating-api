@@ -1,9 +1,8 @@
-# Анонимный чат: боты ВК и Telegram + Chat API
+# Dating API
 
-Боты соединяют двух случайных людей из сообществ ВК и Telegram в анонимный диалог: очередь общая.
-Боты и Chat API — отдельные сервисы. Логика поиска и пар живёт в Chat API.
-Бот ВК принимает сообщения, вызывает REST Chat API и читает события из Redis Streams.
-Бот Telegram работает на сервере chat-engine: ходит в Chat API по HTTPS
+Люди из сообществ ВК, Telegram и сайта попадают в одну очередь. Логика поиска и пар живёт здесь.
+Бот ВК — репозиторий `dating-bot-vk`, бот Telegram — `dating-bot-tg`.
+Бот ВК вызывает REST и читает события из Redis Streams. Бот Telegram ходит по HTTPS
 (`https://api.chatwithyou.site`) через Cloudflare Access и получает события по WebSocket
 `/api/v1/events/tg`. Сайт (`landing`, отдельный репозиторий) ходит в тот же Chat API
 через Cloudflare Worker.
@@ -31,27 +30,27 @@ Chat API публикует событие `demand` в `chat:events:engine`, `en
 Онлайн — кто в поиске или в диалоге, плюс кто писал за последние 5 минут
 (`STATS_ONLINE_WINDOW_SECONDS`). Общие числа включают аккаунты chat-engine.
 
+## Уведомление всем чатам
+
+`POST /api/v1/notifications` с сервисным токеном бота (`CHAT_API_SERVICE_TOKEN`):
+
+```json
+{"text": "Сегодня возможны короткие паузы в поиске"}
+```
+
+Ответ `{"queued": 120}` — сколько диалогов поставлено в очередь. Текст уходит каждому человеку
+в каждом чате, куда подключён бот: сообщества ВК, бот Telegram и сайт. Человек, который писал
+в два сообщества, получит сообщение в обоих. Текущий анонимный диалог не закрывается,
+кнопки под последней репликой остаются. Доставка идёт около 10 сообщений в секунду,
+чтобы не упереться в лимиты ВК и Telegram.
+
+Сайт получает событие `type: notice` по WebSocket `/api/v1/events/web`.
+Его нужно показать отдельно от реплики собеседника.
+
 ## Структура
 
 ```
 .
-├── vk_bot/                     # Сервис: бот ВК (контейнер vk-bot)
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── app/
-│       ├── main.py             # Точка входа: Long Poll каждого сообщества и чтение событий
-│       ├── config.py           # Переменные окружения: токены ВК, Chat API, Redis
-│       ├── startup.py          # Проверка токена и включение Long Poll / кнопок сообщества
-│       ├── longpoll.py         # BotPolling с обязательным параметром version
-│       ├── handlers.py         # Сценарии: «Начать», поиск, следующий, стоп, пересылка реплик
-│       ├── gateway.py          # Отправка ответа в нужное сообщество + клавиатуры
-│       ├── events.py           # События Chat API из Redis Stream chat:events:vk → сообщения
-│       ├── api_client.py       # HTTP-клиент Chat API (сервисный токен)
-│       ├── peer.py             # Адресат: сообщество и пользователь
-│       └── ui.py               # Тексты и клавиатуры
-├── tg_bot/                     # Бот Telegram на aiogram. На проде — сервер chat-engine
-│   ├── docker-compose.yml      # Один контейнер dating-tg-bot, без Redis и Postgres
-│   └── app/                    # Тот же сценарий, что у ВК; события по WebSocket /events/tg
 ├── engine_bridge/              # Сервис: мост к chat-engine (контейнер vk-engine-bridge, профиль engine)
 │   └── app/
 │       ├── bridge.py           # demand → hunt → поиск в chat-engine → attach, пересылка реплик
@@ -71,18 +70,18 @@ Chat API публикует событие `demand` в `chat:events:engine`, `en
 │       ├── schemas.py
 │       ├── repositories/sessions.py  # SQL: очередь, пары, пользователи
 │       ├── services/chat.py    # Логика поиска и диалога
-│       └── routers/            # peers.py — REST действий, engine.py — подбор из chat-engine,
-│                               # stats.py — /stats, ws.py — /events/web и /events/{vk|tg}
+│       └── routers/            # peers.py — REST действий, channels.py — чаты и /notifications,
+│                               # engine.py — подбор из chat-engine, stats.py — /stats,
+│                               # ws.py — /events/web, /events/{vk|tg}, /broadcasts/{vk|tg}
 ├── supabase/
 │   ├── init/001_schema.sql     # Схема базы (идемпотентная)
 │   └── studio/                 # Папки Supabase Studio
 ├── deploy/
-│   ├── update.sh               # Сервер ВК: .env, pull образов, перезапуск
-│   └── tg_update.sh            # Сервер chat-engine: контейнер бота Telegram
+│   └── update.sh               # Сервер: .env, pull образов, перезапуск
 ├── .github/workflows/
-│   ├── deploy.yml              # Push в master → образы → сервер ВК, затем бот Telegram
+│   ├── deploy.yml              # Push в master → образы Chat API и моста → сервер
 │   └── server-logs.yml         # Ручной просмотр логов на сервере
-├── docker-compose.yml          # db, redis, chat-api, bot, engine-bridge, studio, meta, cloudflared
+├── docker-compose.yml          # db, redis, chat-api, engine-bridge, studio, meta, cloudflared
 └── .env.example
 ```
 
@@ -91,34 +90,20 @@ Chat API публикует событие `demand` в `chat:events:engine`, `en
 Всё вместе в Docker:
 
 ```sh
-cp .env.example .env   # заполнить VK_TOKEN
+cp .env.example .env
 docker compose up --build
 ```
 
 - Chat API: http://127.0.0.1:8000/docs
 - Studio: http://127.0.0.1:54323
 
-Локально бот Telegram (нужны `TELEGRAM_BOT_TOKEN` и `CHAT_API_TG_TOKEN`):
+Бот ВК запускается из репозитория `dating-bot-vk`. Ему нужна сеть этого Compose (`vk-bot_default`)
+и тот же `CHAT_API_SERVICE_TOKEN`. Бот Telegram — репозиторий `dating-bot-tg`, на сервере chat-engine.
 
-```sh
-COMPOSE_PROFILES=telegram docker compose up --build
-```
+Секреты GitHub репозитория `aStormspirit/dating-api`:
 
-На проде бот Telegram деплоится на сервер chat-engine отдельным job `telegram` в `deploy.yml`.
-Секреты GitHub репозитория `aStormspirit/dating-bot`:
+- `CHAT_API_TG_TOKEN` — токен Chat API только для пользователей tg; тот же секрет в `dating-bot-tg`
+- `CHAT_ENGINE_TOKEN` — `API_TOKEN` chat-engine, для `engine_bridge`
 
-- `TELEGRAM_BOT_TOKEN` — токен @BotFather
-- `CHAT_API_TG_TOKEN` — токен Chat API только для пользователей tg; один и тот же на обоих серверах
-- `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` — сервисный токен Cloudflare Access к api.chatwithyou.site
-- `TG_DEPLOY_HOST`, `TG_DEPLOY_USER`, `TG_DEPLOY_SSH_KEY` — SSH на сервер chat-engine (82.26.86.99)
-- `CHAT_ENGINE_TOKEN` — `API_TOKEN` chat-engine, для `engine_bridge` на сервере ВК
-
-`CHAT_API_ENGINE_TOKEN` генерируется на сервере ВК. Мост к chat-engine запускается, если задан `CHAT_ENGINE_TOKEN`.
-
-Бот без Docker (Chat API и Redis уже запущены):
-
-```sh
-cd vk_bot
-pip install -r requirements.txt
-python -m app.main
-```
+`CHAT_API_ENGINE_TOKEN` и `CHAT_API_SERVICE_TOKEN` генерируются на сервере.
+Мост к chat-engine запускается, если задан `CHAT_ENGINE_TOKEN`.

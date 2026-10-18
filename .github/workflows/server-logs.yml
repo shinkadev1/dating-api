@@ -28,10 +28,6 @@ jobs:
             cd "$APP_DIR"
             echo '--- TOKENS ---'
             awk -F= '
-              /^VK_TOKEN=/ { print "VK_TOKEN", (length($2) > 0 ? "set" : "empty") }
-              /^VK_TOKENS=/ { n = split($2, a, ","); c = 0; for (i = 1; i <= n; i++) if (a[i] ~ /[^[:space:]]/) c++; print "VK_TOKENS", c }
-            ' .env
-            awk -F= '
               /^CHAT_API_APP_TOKEN=/ { print "CHAT_API_APP_TOKEN", (length($2) > 0 ? "set" : "empty") }
               /^CLOUDFLARE_TUNNEL_TOKEN=/ { print "CLOUDFLARE_TUNNEL_TOKEN length", length($0) - length("CLOUDFLARE_TUNNEL_TOKEN=") }
             ' .env
