@@ -238,6 +238,24 @@ def _public_handle(peer: Peer, handle: str | None) -> str | None:
     return f"@{username}"
 
 
+async def channel_recipients(conn: AsyncConnection) -> list[Peer]:
+    """Люди во всех чатах бота. Один человек в двух сообществах — два адресата.
+
+    Писать можно только туда, где человек уже открыл диалог с ботом.
+    """
+    cursor = await conn.execute(
+        """
+        SELECT channel.platform, channel.external_id, link.user_id
+        FROM user_channels AS link
+        JOIN channels AS channel ON channel.id = link.channel_id
+        WHERE channel.platform IN ('vk', 'tg', 'web')
+        ORDER BY channel.platform, channel.external_id, link.user_id
+        """
+    )
+    rows = await cursor.fetchall()
+    return [Peer(row["platform"], row["external_id"], int(row["user_id"])) for row in rows]
+
+
 async def register_channel(conn: AsyncConnection, platform: str, external_id: str, title: str) -> None:
     """Создаёт чат бота или обновляет его название, если оно передано."""
     await conn.execute(

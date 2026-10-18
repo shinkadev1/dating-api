@@ -8,7 +8,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status
 
 from app.config import get_settings
 from app.deps import CLIENT_PLATFORMS, identify_client
-from app.events import BotEventFeed
+from app.events import BotEventFeed, broadcast_stream
 
 router = APIRouter(tags=["events"])
 
@@ -26,8 +26,9 @@ async def web_events(websocket: WebSocket) -> None:
 
     Требует заголовок `Authorization: Bearer <токен приложения>`, иначе
     соединение закрывается с кодом 1008. Сервер только отправляет JSON
-    `{"to": {"platform", "bot_key", "user_id"}, "type", "text"?, "reason"?}`,
-    входящие сообщения клиента игнорируются.
+    `{"to": {"platform", "bot_key", "user_id"}, "type", "text"?, "reason"?}`.
+    `type=notice` — уведомление всем диалогам, его не нужно показывать как реплику собеседника.
+    Входящие сообщения клиента игнорируются.
     """
     if identify_client(_bearer_token(websocket), get_settings()) != "app":
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
@@ -44,6 +45,22 @@ async def web_events(websocket: WebSocket) -> None:
         hub.remove(websocket)
 
 
+async def _serve_bot_feed(
+    websocket: WebSocket,
+    platform: str,
+    consumer: str,
+    *,
+    stream: str | None = None,
+    start: str = "$",
+) -> None:
+    client = identify_client(_bearer_token(websocket), get_settings())
+    if platform not in _BOT_PLATFORMS or client is None or platform not in CLIENT_PLATFORMS[client]:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    await websocket.accept()
+    await BotEventFeed(websocket.app.state.redis, platform, consumer, stream=stream, start=start).serve(websocket)
+
+
 @router.websocket("/events/{platform}")
 async def bot_events(
     websocket: WebSocket,
@@ -57,9 +74,17 @@ async def bot_events(
     отвечает `{"ack": id}`. Неподтверждённое событие придёт снова при переподключении
     с тем же `consumer`.
     """
-    client = identify_client(_bearer_token(websocket), get_settings())
-    if platform not in _BOT_PLATFORMS or client is None or platform not in CLIENT_PLATFORMS[client]:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        return
-    await websocket.accept()
-    await BotEventFeed(websocket.app.state.redis, platform, consumer).serve(websocket)
+    await _serve_bot_feed(websocket, platform, consumer)
+
+
+@router.websocket("/broadcasts/{platform}")
+async def broadcast_events(
+    websocket: WebSocket,
+    platform: str,
+    consumer: Annotated[str, Query(pattern=r"^[\w.-]{1,64}$")] = "bot",
+) -> None:
+    """Уведомления диалогам бота. Тот же протокол, что у `/events/{platform}`, событие `notice`.
+
+    Отдельный сокет, чтобы рассылка не задерживала реплики анонимного диалога.
+    """
+    await _serve_bot_feed(websocket, platform, consumer, stream=broadcast_stream(platform), start="0")

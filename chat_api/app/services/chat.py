@@ -152,6 +152,13 @@ class ChatService:
         async with self._pool.connection() as conn:
             await repo.register_channel(conn, platform, external_id, title)
 
+    async def notify_channels(self, text: str) -> int:
+        """Ставит текст каждому человеку в каждом чате, где он уже писал боту."""
+        async with self._pool.connection() as conn:
+            recipients = await repo.channel_recipients(conn)
+        await self._events.publish_notices(recipients, text)
+        return len(recipients)
+
     async def state(self, peer: Peer) -> StateOut:
         async with self._pool.connection() as conn:
             session = await repo.get_session(conn, peer)

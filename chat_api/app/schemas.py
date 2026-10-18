@@ -63,9 +63,17 @@ class MessageOut(BaseModel):
 class ChatEvent(BaseModel):
     """Событие для второй стороны. Инициатор узнаёт итог из HTTP-ответа."""
 
-    type: Literal["partner_found", "message", "partner_left"]
-    text: str | None = Field(None, description="Текст для `message`")
+    type: Literal["partner_found", "message", "partner_left", "notice"]
+    text: str | None = Field(None, description="Текст для `message` и `notice`")
     reason: LeftReason | None = Field(None, description="Причина для `partner_left`")
+
+
+class NoticeIn(BaseModel):
+    text: str = Field(min_length=1, max_length=4096, description="Текст, который получат диалоги бота")
+
+
+class NoticeOut(BaseModel):
+    queued: int = Field(description="Сколько диалогов получат текст")
 
 
 class EngineDemandOut(BaseModel):

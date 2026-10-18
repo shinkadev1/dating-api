@@ -4,6 +4,8 @@
 Боты и engine_bridge читают свои потоки группой потребителей: напрямую из Redis или,
 с другого сервера, через WebSocket `/events/{platform}`. Поток сайта читает сам API
 и отдаёт серверному приложению по WebSocket.
+Уведомления всем диалогам идут отдельно: `chat:broadcast:vk`, `chat:broadcast:tg`,
+`chat:broadcast:web`. Так рассылка не вытесняет живые реплики из короткого потока диалога.
 """
 
 from __future__ import annotations
@@ -23,14 +25,21 @@ from app.schemas import ChatEvent
 logger = logging.getLogger(__name__)
 
 STREAM_PREFIX = "chat:events:"
+BROADCAST_PREFIX = "chat:broadcast:"
 BOTS_GROUP = "bots"
 _BLOCK_MS = 5000
+# Рассылка может быть длиннее живого потока: его maxlen не должен срезать уведомления.
+_BROADCAST_MAXLEN = 1_000_000
 # Таймаут сокета должен быть длиннее блокирующего XREAD, иначе чтение обрывается.
 REDIS_SOCKET_TIMEOUT = _BLOCK_MS / 1000 + 10
 
 
 def stream_name(platform: str) -> str:
     return f"{STREAM_PREFIX}{platform}"
+
+
+def broadcast_stream(platform: str) -> str:
+    return f"{BROADCAST_PREFIX}{platform}"
 
 
 class EventBus:
@@ -43,6 +52,27 @@ class EventBus:
     async def publish(self, recipient: Peer, event: ChatEvent) -> None:
         body = {"to": recipient.as_dict(), **event.model_dump(exclude_none=True)}
         await self._add(stream_name(recipient.platform), body, f"{event.type} для {recipient}")
+
+    async def publish_notices(self, recipients: list[Peer], text: str) -> None:
+        """Кладёт уведомление в поток рассылки платформы. Пустой список ничего не пишет."""
+        if not recipients:
+            return
+        event = ChatEvent(type="notice", text=text).model_dump(exclude_none=True)
+        sent = 0
+        try:
+            for recipient in recipients:
+                body = {"to": recipient.as_dict(), **event}
+                await self._redis.xadd(
+                    broadcast_stream(recipient.platform),
+                    {"data": json.dumps(body, ensure_ascii=False)},
+                    maxlen=_BROADCAST_MAXLEN,
+                    approximate=True,
+                )
+                sent += 1
+        except Exception:
+            logger.exception("Уведомление оборвалось на %s из %s", sent, len(recipients))
+            raise
+        logger.info("Уведомление поставлено в очередь для %s диалогов", sent)
 
     async def request_engine(self) -> None:
         """Человек остался в очереди один: engine_bridge сразу запускает поиск в chat-engine."""
@@ -67,14 +97,23 @@ class BotEventFeed:
     Неподтверждённые события приходят снова при следующем подключении того же потребителя.
     """
 
-    def __init__(self, redis: Redis, platform: str, consumer: str) -> None:
+    def __init__(
+        self,
+        redis: Redis,
+        platform: str,
+        consumer: str,
+        *,
+        stream: str | None = None,
+        start: str = "$",
+    ) -> None:
         self._redis = redis
-        self._stream = stream_name(platform)
+        self._stream = stream or stream_name(platform)
         self._consumer = consumer
+        self._start = start
 
     async def serve(self, websocket: WebSocket) -> None:
         try:
-            await self._redis.xgroup_create(self._stream, BOTS_GROUP, id="$", mkstream=True)
+            await self._redis.xgroup_create(self._stream, BOTS_GROUP, id=self._start, mkstream=True)
         except ResponseError as exc:
             if "BUSYGROUP" not in str(exc):
                 raise
@@ -134,22 +173,35 @@ class WebSocketHub:
     def remove(self, socket: WebSocket) -> None:
         self._sockets.discard(socket)
 
+    async def _tail(self, stream: str) -> str:
+        """Последний id потока. Реальный id не пропускает события, пришедшие между чтениями."""
+        rows = await self._redis.xrevrange(stream, count=1)
+        return rows[0][0] if rows else "0-0"
+
     async def run(self) -> None:
-        """Читает поток сайта с текущего конца. Каждая копия API видит все события."""
-        last_id = "$"
-        stream = stream_name("web")
+        """Читает потоки сайта с текущего конца. Каждая копия API видит все события."""
+        cursors: dict[str, str] = {}
+        for stream in (stream_name("web"), broadcast_stream("web")):
+            while stream not in cursors:
+                try:
+                    cursors[stream] = await self._tail(stream)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Не прочитал конец %s, повтор через секунду", stream)
+                    await asyncio.sleep(1)
         while True:
             try:
-                batches = await self._redis.xread({stream: last_id}, block=_BLOCK_MS, count=100)
+                batches = await self._redis.xread(cursors, block=_BLOCK_MS, count=100)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("Не прочитал поток сайта, повтор через секунду")
                 await asyncio.sleep(1)
                 continue
-            for _stream, entries in batches or []:
+            for name, entries in batches or []:
                 for entry_id, fields in entries:
-                    last_id = entry_id
+                    cursors[name] = entry_id
                     await self._dispatch(fields)
 
     async def _dispatch(self, fields: dict) -> None:
