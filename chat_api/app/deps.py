@@ -11,6 +11,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.config import Settings, get_settings
 from app.peer import ENGINE_PLATFORM, ENGINE_USER_ID, Peer
 from app.services.chat import ChatService
+from app.services.media import MediaService
 
 Client = Literal["bot", "tg_bot", "app", "engine"]
 # Бот ВК и Telegram не может действовать от имени пользователей сайта и наоборот.
@@ -30,7 +31,12 @@ def get_chat(request: Request) -> ChatService:
     return request.app.state.chat
 
 
+def get_media(request: Request) -> MediaService:
+    return request.app.state.media
+
+
 Chat = Annotated[ChatService, Depends(get_chat)]
+MediaSvc = Annotated[MediaService, Depends(get_media)]
 Credentials = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]
 AppSettings = Annotated[Settings, Depends(get_settings)]
 

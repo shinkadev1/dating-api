@@ -344,3 +344,22 @@ COMMENT ON COLUMN user_channels.last_seen_at IS 'Последняя активн
 COMMENT ON TABLE channels IS 'Чаты, куда подключён бот: сообщества ВК, бот Telegram, сайт';
 COMMENT ON TABLE user_channels IS 'Через какие чаты уже общался человек';
 COMMENT ON TABLE engine_presence IS 'Аккаунты chat-engine. Это не пользователи: у всех один user_id';
+
+-- Файл уже лежит в S3. Пересылка собеседнику сюда не входит: её делает следующий шаг.
+CREATE TABLE IF NOT EXISTS stored_media (
+    id UUID PRIMARY KEY,
+    platform TEXT NOT NULL,
+    bot_key TEXT NOT NULL,
+    user_id BIGINT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('photo', 'video', 'video_note', 'voice')),
+    object_key TEXT NOT NULL UNIQUE,
+    content_type TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL CHECK (size_bytes > 0),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS stored_media_owner_idx
+    ON stored_media (platform, bot_key, user_id, created_at DESC);
+
+COMMENT ON TABLE stored_media IS 'Медиа, которое человек прислал в диалог. Объект лежит в S3 по object_key';
+COMMENT ON COLUMN stored_media.kind IS 'photo, video, video_note — кружок, voice — голосовое';

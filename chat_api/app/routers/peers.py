@@ -6,11 +6,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, HTTPException, status
+from typing import Annotated
 
-from app.deps import Chat, HumanPeer, ServicePeer
-from app.schemas import MessageIn, MessageOut, StateOut, StopOut, VisitIn
+from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile, status
+
+from app.deps import Chat, HumanPeer, MediaSvc, ServicePeer
+from app.media_types import MAX_BYTES, MediaRejected
+from app.schemas import MediaKind, MediaOut, MessageIn, MessageOut, StateOut, StopOut, VisitIn
 from app.services.chat import NotChattingError
+from app.services.media import StorageDisabled
+from app.services.storage import StorageError
 
 _NOT_CHATTING = "Нет активного диалога"
 
@@ -94,6 +99,41 @@ async def send_message(body: MessageIn, peer: ServicePeer, chat: Chat) -> Messag
         return await chat.send_message(peer, body.text)
     except NotChattingError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, _NOT_CHATTING) from exc
+
+
+@router.post(
+    "/media",
+    summary="Сохранить медиа",
+    responses={
+        status.HTTP_409_CONFLICT: {"description": _NOT_CHATTING},
+        status.HTTP_413_REQUEST_ENTITY_TOO_LARGE: {"description": "Файл больше предела для этого вида"},
+        status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: {"description": "Содержимое не совпало с видом"},
+        status.HTTP_502_BAD_GATEWAY: {"description": "Бакет не принял файл"},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "S3 не настроен"},
+    },
+)
+async def store_media(
+    peer: ServicePeer,
+    chat: Chat,
+    media: MediaSvc,
+    kind: Annotated[MediaKind, Form(description="photo, video, video_note или voice")],
+    file: Annotated[UploadFile, File(description="Байты фото, видео, кружка или голосового")],
+) -> MediaOut:
+    """Кладёт файл в S3 и запоминает ключ. Собеседнику медиа этим запросом не отправляется.
+
+    Принимается только в активном диалоге. Вид проверяется по байтам файла, а не по имени.
+    """
+    if (await chat.state(peer)).phase != "chatting":
+        raise HTTPException(status.HTTP_409_CONFLICT, _NOT_CHATTING)
+    raw = await file.read(MAX_BYTES[kind] + 1)
+    try:
+        return await media.save(peer, kind, raw)
+    except StorageDisabled as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Хранилище медиа не настроено") from exc
+    except MediaRejected as exc:
+        raise HTTPException(exc.status, exc.detail) from exc
+    except StorageError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Не удалось сохранить файл") from exc
 
 
 @router.post("/delivery-failed", status_code=status.HTTP_204_NO_CONTENT, summary="Сообщить о недоставке")

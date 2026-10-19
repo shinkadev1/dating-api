@@ -60,6 +60,19 @@ class MessageOut(BaseModel):
     phase: Phase
 
 
+MediaKind = Literal["photo", "video", "video_note", "voice"]
+
+
+class MediaOut(BaseModel):
+    """Файл лежит в S3. Собеседнику он этим запросом не отправляется."""
+
+    id: UUID
+    kind: MediaKind
+    key: str = Field(description="Ключ объекта в бакете")
+    content_type: str
+    size: int = Field(description="Размер в байтах")
+
+
 class ChatEvent(BaseModel):
     """Событие для второй стороны. Инициатор узнаёт итог из HTTP-ответа."""
 

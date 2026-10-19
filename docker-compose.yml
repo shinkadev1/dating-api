@@ -73,6 +73,11 @@ services:
       CHAT_API_TG_TOKEN: ${CHAT_API_TG_TOKEN:-}
       ENGINE_FALLBACK_AFTER_SECONDS: ${ENGINE_FALLBACK_AFTER_SECONDS:-0}
       STATS_ONLINE_WINDOW_SECONDS: ${STATS_ONLINE_WINDOW_SECONDS:-300}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      S3_REGION: ${S3_REGION:-ru1}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
     depends_on:
       db:
         condition: service_healthy

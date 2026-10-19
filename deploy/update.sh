@@ -98,6 +98,23 @@ if ! optional_secret CHAT_API_TG_TOKEN; then
   drop_env CHAT_API_TG_TOKEN
 fi
 
+# Фото, видео, кружки и голосовые. Без ключей API стартует, загрузка отвечает 503.
+if optional_secret S3_ACCESS_KEY && optional_secret S3_SECRET_KEY && optional_secret S3_BUCKET; then
+  if ! optional_secret S3_ENDPOINT_URL; then
+    set_env S3_ENDPOINT_URL "https://s3.ru1.storage.beget.cloud"
+  fi
+  if ! optional_secret S3_REGION; then
+    set_env S3_REGION "ru1"
+  fi
+else
+  echo "Нет ключей S3: медиа не сохраняется."
+  drop_env S3_ACCESS_KEY
+  drop_env S3_SECRET_KEY
+  drop_env S3_BUCKET
+  drop_env S3_ENDPOINT_URL
+  drop_env S3_REGION
+fi
+
 # Мост к chat-engine запускается, только если есть токен chat-engine.
 profiles=proxy
 optional_services=""

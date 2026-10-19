@@ -25,15 +25,49 @@ class Settings(BaseSettings):
     stats_online_window_seconds: float = Field(300, gt=0)
     events_maxlen: int = 10_000
 
-    @field_validator("chat_api_engine_token", "chat_api_tg_token", mode="before")
+    # S3-совместимое хранилище медиа. Без любого из значений загрузка выключена.
+    s3_endpoint_url: str | None = None
+    s3_region: str = "ru1"
+    s3_bucket: str | None = None
+    s3_access_key: str | None = None
+    s3_secret_key: str | None = None
+
+    @field_validator(
+        "chat_api_engine_token",
+        "chat_api_tg_token",
+        "s3_endpoint_url",
+        "s3_bucket",
+        "s3_access_key",
+        "s3_secret_key",
+        mode="before",
+    )
     @classmethod
     def _empty_as_unset(cls, value: object) -> object:
         """Compose передаёт незаданную переменную пустой строкой."""
-        return None if isinstance(value, str) and not value.strip() else value
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("s3_region", mode="before")
+    @classmethod
+    def _region(cls, value: object) -> object:
+        if not isinstance(value, str) or not value.strip():
+            return "ru1"
+        return value.strip()
+
+    @field_validator("s3_endpoint_url", mode="after")
+    @classmethod
+    def _endpoint(cls, value: str | None) -> str | None:
+        return value.rstrip("/") if value else value
 
     @property
     def engine_enabled(self) -> bool:
         return bool(self.chat_api_engine_token)
+
+    @property
+    def s3_enabled(self) -> bool:
+        return bool(self.s3_endpoint_url and self.s3_bucket and self.s3_access_key and self.s3_secret_key)
 
     @model_validator(mode="after")
     def _distinct_tokens(self) -> Settings:

@@ -16,6 +16,8 @@ from app.db import create_pool, ensure_schema
 from app.events import REDIS_SOCKET_TIMEOUT, EventBus, WebSocketHub
 from app.routers import channels, engine, peers, stats, visitors, ws
 from app.services.chat import ChatService
+from app.services.media import MediaService
+from app.services.storage import ObjectStorage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -35,7 +37,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     hub = WebSocketHub(redis)
     hub_task = asyncio.create_task(hub.run(), name="web-events")
 
+    storage = ObjectStorage(
+        endpoint=settings.s3_endpoint_url,
+        region=settings.s3_region,
+        bucket=settings.s3_bucket,
+        access_key=settings.s3_access_key,
+        secret_key=settings.s3_secret_key,
+    )
+    await storage.open()
     app.state.chat = ChatService(pool, EventBus(redis, settings.events_maxlen), settings)
+    app.state.media = MediaService(pool, storage)
     app.state.hub = hub
     app.state.pool = pool
     app.state.redis = redis
@@ -45,6 +56,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         hub_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await hub_task
+        await storage.close()
         await redis.aclose()
         await pool.close()
 
