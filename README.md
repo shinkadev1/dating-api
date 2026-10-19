@@ -109,8 +109,8 @@ docker compose up --build
 - Chat API: http://127.0.0.1:8000/docs
 - Studio: http://127.0.0.1:54323
 
-Бот ВК запускается из репозитория `dating-bot-vk`. Ему нужна сеть этого Compose (`vk-bot_default`)
-и тот же `CHAT_API_SERVICE_TOKEN`. Бот Telegram — репозиторий `dating-bot-tg`, на сервере chat-engine.
+Бот ВК запускается отдельно из репозитория `dating-bot-vk` и получает события по WebSocket.
+Ему нужен тот же `CHAT_API_SERVICE_TOKEN`. Бот Telegram — репозиторий `dating-bot-tg`, на сервере chat-engine.
 
 Секреты GitHub репозитория `aStormspirit/dating-api`:
 
