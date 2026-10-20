@@ -26,6 +26,18 @@ logger = logging.getLogger(__name__)
 
 _RECONNECT_DELAY_SECONDS = 3.0
 
+_MEDIA_LABELS = {
+    "photo": "[фото]",
+    "video": "[видео]",
+    "video_note": "[кружок]",
+    "voice": "[голосовое]",
+}
+
+
+def _media_label(kind: str) -> str:
+    """chat-engine принимает только текст, поэтому файл уходит короткой пометкой."""
+    return _MEDIA_LABELS.get(kind, "[медиа]")
+
 # Служебные фразы анонимного бота (@AnonRuBot и похожие). Их нельзя отдавать человеку.
 # Уход собеседника закрывает диалог. Реклама и меню — нет: в «Собеседник найден»
 # есть ссылка t.me/anon…, и /stop по ней обрывал каждый новый диалог.
@@ -116,6 +128,8 @@ class Bridge:
         async with link.lock:
             if kind == "message":
                 await self._forward_to_engine(link, str(body.get("text") or ""))
+            elif kind == "media":
+                await self._forward_to_engine(link, _media_label(str(body.get("kind") or "")))
             elif kind == "partner_left":
                 await self._stop_engine(link)
 

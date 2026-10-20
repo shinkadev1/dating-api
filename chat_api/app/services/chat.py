@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -17,6 +18,7 @@ from app.repositories import sessions as repo
 from app.repositories.visitors import save_web_visitor
 from app.schemas import (
     ChatEvent,
+    MediaKind,
     EngineAttachOut,
     EngineDemandOut,
     LeftReason,
@@ -28,6 +30,8 @@ from app.schemas import (
     StopOut,
     VisitorOut,
 )
+
+logger = logging.getLogger(__name__)
 
 Outbox = list[tuple[Peer, ChatEvent]]
 
@@ -164,6 +168,10 @@ class ChatService:
             session = await repo.get_session(conn, peer)
         return StateOut(phase=session.phase if session else "idle")
 
+    async def can_send_media(self, peer: Peer) -> bool:
+        async with self._pool.connection() as conn:
+            return await repo.user_is_premium(conn, peer)
+
     async def search(self, peer: Peer) -> StateOut:
         """Встаёт в очередь. Прежний собеседник узнаёт, что диалог закончен."""
         return await self._search(peer, "stopped")
@@ -198,6 +206,35 @@ class ChatService:
             await self._detach(conn, peer, "stopped", outbox)
         await self._flush(outbox)
         return MessageOut(delivered=False, phase="idle")
+
+    async def forward_media(self, peer: Peer, media_id: UUID, kind: MediaKind, content_type: str) -> None:
+        """Ставит уже сохранённый файл в очередь собеседника.
+
+        Если пара успела распасться, диалог закрывается так же, как при текстовой реплике.
+        """
+        async with self._pool.connection() as conn:
+            session = await repo.get_session(conn, peer)
+            if session is None or session.phase != "chatting":
+                return
+            partner = await self._linked_partner(conn, peer, session)
+        if partner is None:
+            outbox: Outbox = []
+            async with self._locked() as conn:
+                await self._detach(conn, peer, "stopped", outbox)
+            await self._flush(outbox)
+            return
+        await self._events.publish(
+            partner,
+            ChatEvent(type="media", media_id=str(media_id), kind=kind, content_type=content_type),
+        )
+        logger.info(
+            "Медиа %s (%s) -> %s/%s/%s",
+            media_id,
+            kind,
+            partner.platform,
+            partner.bot_key,
+            partner.user_id,
+        )
 
     async def delivery_failed(self, peer: Peer) -> None:
         """Клиент не смог доставить событие этому пользователю: его диалог закрывается."""

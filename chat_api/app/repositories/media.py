@@ -38,3 +38,19 @@ async def insert_media(
             **peer.as_dict(),
         },
     )
+
+
+async def get_media(conn: AsyncConnection, media_id: UUID) -> tuple[str, str, str] | None:
+    """Вид, ключ объекта и MIME. None, если записи нет."""
+    cursor = await conn.execute(
+        """
+        SELECT kind, object_key, content_type
+        FROM stored_media
+        WHERE id = %(id)s
+        """,
+        {"id": media_id},
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return None
+    return str(row[0]), str(row[1]), str(row[2])

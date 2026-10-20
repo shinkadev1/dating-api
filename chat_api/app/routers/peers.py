@@ -105,6 +105,7 @@ async def send_message(body: MessageIn, peer: ServicePeer, chat: Chat) -> Messag
     "/media",
     summary="Сохранить медиа",
     responses={
+        status.HTTP_403_FORBIDDEN: {"description": "У пользователя нет премиума"},
         status.HTTP_409_CONFLICT: {"description": _NOT_CHATTING},
         status.HTTP_413_REQUEST_ENTITY_TOO_LARGE: {"description": "Файл больше предела для этого вида"},
         status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: {"description": "Содержимое не совпало с видом"},
@@ -119,21 +120,27 @@ async def store_media(
     kind: Annotated[MediaKind, Form(description="photo, video, video_note или voice")],
     file: Annotated[UploadFile, File(description="Байты фото, видео, кружка или голосового")],
 ) -> MediaOut:
-    """Кладёт файл в S3 и запоминает ключ. Собеседнику медиа этим запросом не отправляется.
+    """Кладёт файл в S3 и ставит событие `media` собеседнику.
 
-    Принимается только в активном диалоге. Вид проверяется по байтам файла, а не по имени.
+    Принимается только в активном диалоге и только от пользователя с премиумом.
+    Вид проверяется по байтам файла, а не по имени.
+    Байты забирает бот собеседника отдельным запросом.
     """
+    if not await chat.can_send_media(peer):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Медиа доступно с премиумом")
     if (await chat.state(peer)).phase != "chatting":
         raise HTTPException(status.HTTP_409_CONFLICT, _NOT_CHATTING)
     raw = await file.read(MAX_BYTES[kind] + 1)
     try:
-        return await media.save(peer, kind, raw)
+        saved = await media.save(peer, kind, raw)
     except StorageDisabled as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Хранилище медиа не настроено") from exc
     except MediaRejected as exc:
         raise HTTPException(exc.status, exc.detail) from exc
     except StorageError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Не удалось сохранить файл") from exc
+    await chat.forward_media(peer, saved.id, saved.kind, saved.content_type)
+    return saved
 
 
 @router.post("/delivery-failed", status_code=status.HTTP_204_NO_CONTENT, summary="Сообщить о недоставке")

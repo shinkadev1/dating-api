@@ -97,6 +97,16 @@ class ObjectStorage:
             logger.exception("S3 не записал %s", key)
             raise StorageError(key) from exc
 
+    async def get(self, key: str) -> bytes:
+        if not self.enabled or self._bucket is None:
+            raise StorageError("Хранилище не настроено")
+        try:
+            response = await self._client.get_object(Bucket=self._bucket, Key=key)
+            return await response["Body"].read()
+        except Exception as exc:
+            logger.exception("S3 не отдал %s", key)
+            raise StorageError(key) from exc
+
     async def delete(self, key: str) -> None:
         if not self.enabled or self._bucket is None:
             return

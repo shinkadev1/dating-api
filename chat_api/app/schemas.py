@@ -64,7 +64,7 @@ MediaKind = Literal["photo", "video", "video_note", "voice"]
 
 
 class MediaOut(BaseModel):
-    """Файл лежит в S3. Собеседнику он этим запросом не отправляется."""
+    """Файл лежит в S3 и поставлен в очередь собеседнику."""
 
     id: UUID
     kind: MediaKind
@@ -76,9 +76,12 @@ class MediaOut(BaseModel):
 class ChatEvent(BaseModel):
     """Событие для второй стороны. Инициатор узнаёт итог из HTTP-ответа."""
 
-    type: Literal["partner_found", "message", "partner_left", "notice"]
+    type: Literal["partner_found", "message", "partner_left", "notice", "media"]
     text: str | None = Field(None, description="Текст для `message` и `notice`")
     reason: LeftReason | None = Field(None, description="Причина для `partner_left`")
+    media_id: str | None = Field(None, description="Файл для `media`. Байты забирает бот собеседника")
+    kind: MediaKind | None = Field(None, description="Вид файла для `media`")
+    content_type: str | None = Field(None, description="MIME для `media`")
 
 
 class NoticeIn(BaseModel):

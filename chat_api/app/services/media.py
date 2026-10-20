@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from psycopg_pool import AsyncConnectionPool
 
 from app.media_types import KINDS, MAX_BYTES, MediaRejected, detect_content_type, object_key
 from app.peer import Peer
-from app.repositories.media import insert_media
+from app.repositories.media import get_media, insert_media
 from app.schemas import MediaOut
 from app.services.storage import ObjectStorage, StorageError
 
@@ -67,3 +67,14 @@ class MediaService:
             len(body),
         )
         return MediaOut(id=media_id, kind=kind, key=key, content_type=content_type, size=len(body))
+
+    async def load(self, media_id: UUID) -> tuple[str, str, bytes] | None:
+        """Вид, MIME и байты. None, если записи нет или бакет недоступен."""
+        if not self._storage.enabled:
+            raise StorageDisabled
+        async with self._pool.connection() as conn:
+            row = await get_media(conn, media_id)
+        if row is None:
+            return None
+        kind, key, content_type = row
+        return kind, content_type, await self._storage.get(key)
