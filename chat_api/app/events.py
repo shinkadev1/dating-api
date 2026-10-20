@@ -53,11 +53,24 @@ class EventBus:
         body = {"to": recipient.as_dict(), **event.model_dump(exclude_none=True)}
         await self._add(stream_name(recipient.platform), body, f"{event.type} для {recipient}")
 
-    async def publish_notices(self, recipients: list[Peer], text: str) -> None:
+    async def publish_notices(
+        self,
+        recipients: list[Peer],
+        text: str,
+        *,
+        media_id: str | None = None,
+        content_type: str | None = None,
+    ) -> None:
         """Кладёт уведомление в поток рассылки платформы. Пустой список ничего не пишет."""
         if not recipients:
             return
-        event = ChatEvent(type="notice", text=text).model_dump(exclude_none=True)
+        event = ChatEvent(
+            type="notice",
+            text=text,
+            media_id=media_id,
+            kind="photo" if media_id else None,
+            content_type=content_type,
+        ).model_dump(exclude_none=True)
         sent = 0
         try:
             for recipient in recipients:
