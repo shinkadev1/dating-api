@@ -290,7 +290,7 @@ async def user_is_premium(conn: AsyncConnection, peer: Peer) -> bool:
         {"platform": peer.platform, "user_id": peer.user_id},
     )
     row = await cursor.fetchone()
-    return bool(row and row[0])
+    return bool(row and row["is_premium"])
 
 
 async def record_search(conn: AsyncConnection, peer: Peer) -> None:

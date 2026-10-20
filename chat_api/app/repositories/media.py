@@ -53,4 +53,4 @@ async def get_media(conn: AsyncConnection, media_id: UUID) -> tuple[str, str, st
     row = await cursor.fetchone()
     if row is None:
         return None
-    return str(row[0]), str(row[1]), str(row[2])
+    return str(row["kind"]), str(row["object_key"]), str(row["content_type"])
