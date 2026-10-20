@@ -122,11 +122,11 @@ async def store_media(
 ) -> MediaOut:
     """Кладёт файл в S3 и ставит событие `media` собеседнику.
 
-    Принимается только в активном диалоге и только от пользователя с премиумом.
+    Фото временно принимается без премиума. Голос и видео — только с ним.
     Вид проверяется по байтам файла, а не по имени.
     Байты забирает бот собеседника отдельным запросом.
     """
-    if not await chat.can_send_media(peer):
+    if kind != "photo" and not await chat.can_send_media(peer):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Медиа доступно с премиумом")
     if (await chat.state(peer)).phase != "chatting":
         raise HTTPException(status.HTTP_409_CONFLICT, _NOT_CHATTING)

@@ -66,6 +66,34 @@ class ChatApiClient:
         """True, если сообщение ушло человеку."""
         return (await self._request("POST", self._peer(account, "messages"), {"text": text}))["delivered"]
 
+    async def send_photo(self, account: str, data: bytes, content_type: str) -> bool:
+        """Кладёт фото в диалог человека. True, если событие поставлено."""
+        try:
+            response = await self._http.post(
+                self._peer(account, "media"),
+                data={"kind": "photo"},
+                files={"file": ("photo.jpg", data, content_type or "image/jpeg")},
+                timeout=90,
+            )
+        except httpx.HTTPError as exc:
+            raise ChatApiError(f"POST media: {type(exc).__name__}: {exc}") from exc
+        if response.status_code == httpx.codes.CONFLICT:
+            raise NotChattingError(response.text)
+        if response.is_error:
+            raise ChatApiError(f"POST media: HTTP {response.status_code} {response.text}")
+        return True
+
+    async def download_media(self, media_id: str) -> tuple[bytes, str]:
+        """Байты файла, который человек отправил аккаунту chat-engine."""
+        try:
+            response = await self._http.get(f"/media/{media_id}", timeout=90)
+        except httpx.HTTPError as exc:
+            raise ChatApiError(f"GET media: {type(exc).__name__}: {exc}") from exc
+        if response.is_error:
+            raise ChatApiError(f"GET media: HTTP {response.status_code} {response.text}")
+        content_type = response.headers.get("content-type", "image/jpeg").split(";", 1)[0].strip()
+        return response.content, content_type or "image/jpeg"
+
     async def demand(self) -> Demand:
         body = await self._request("GET", "/engine/demand")
         return Demand(waiting=int(body["waiting"]), hunting=int(body["hunting"]))

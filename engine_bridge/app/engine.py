@@ -66,6 +66,33 @@ class EngineClient:
     async def send(self, account: str, text: str) -> None:
         await self._request("POST", f"/accounts/{account}/chat/messages", {"text": text[:MAX_TEXT_LENGTH]})
 
+    async def send_photo(self, account: str, data: bytes, content_type: str) -> None:
+        try:
+            response = await self._http.post(
+                f"/accounts/{account}/chat/photos",
+                files={"file": ("photo.jpg", data, content_type or "image/jpeg")},
+                timeout=90,
+            )
+        except httpx.HTTPError as exc:
+            raise EngineError(f"POST photo: {type(exc).__name__}: {exc}") from exc
+        if response.status_code == httpx.codes.CONFLICT:
+            raise EngineConflictError(response.text)
+        if response.is_error:
+            raise EngineError(f"POST photo: HTTP {response.status_code} {response.text}")
+
+    async def fetch_photo(self, account: str, photo_id: str) -> tuple[bytes, str]:
+        try:
+            response = await self._http.get(
+                f"/accounts/{account}/chat/photos/{photo_id}",
+                timeout=90,
+            )
+        except httpx.HTTPError as exc:
+            raise EngineError(f"GET photo: {type(exc).__name__}: {exc}") from exc
+        if response.is_error:
+            raise EngineError(f"GET photo: HTTP {response.status_code} {response.text}")
+        content_type = response.headers.get("content-type", "image/jpeg").split(";", 1)[0].strip()
+        return response.content, content_type or "image/jpeg"
+
     async def events(self, account: str) -> AsyncIterator[dict]:
         """События аккаунта: сначала snapshot, затем state и message. Заканчивается при обрыве."""
         url = f"{self._base_url.replace('http', 'ws', 1)}/api/v1/accounts/{account}/chat/ws"

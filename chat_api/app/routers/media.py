@@ -1,4 +1,4 @@
-"""Чтение сохранённого файла. Ссылка в событии не публичная: нужен токен бота или сайта."""
+"""Чтение сохранённого файла. Ссылка в событии не публичная: нужен токен бота, сайта или engine_bridge."""
 
 from __future__ import annotations
 
@@ -24,12 +24,10 @@ router = APIRouter(prefix="/media", tags=["media"])
     },
 )
 async def download_media(media_id: UUID, client: CurrentClient, media: MediaSvc) -> Response:
-    """Отдаёт байты файла, который бот собеседника получил в событии `media`.
+    """Отдаёт байты файла, который собеседник получил в событии `media`.
 
-    Токен тот же, что у бота и сайта. Идентификатор знает только сторона, которой событие адресовано.
+    Токен бота, сайта или engine_bridge. Идентификатор знает только сторона, которой событие адресовано.
     """
-    if client == "engine":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Недоступно")
     try:
         loaded = await media.load(media_id)
     except StorageDisabled as exc:

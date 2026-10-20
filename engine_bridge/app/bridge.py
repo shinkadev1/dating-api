@@ -56,7 +56,10 @@ _ENGINE_SYSTEM_RE = re.compile(
     r"анонимн\w+\s+чат|"
     r"t\.me/anon|"
     r"@anonim|"
-    r"@anonrusupport",
+    r"@anonrusupport|"
+    r"хочет отправить вам фото|"
+    r"нажмите на фото|"
+    r"не скрывать для этого диалога",
     re.IGNORECASE,
 )
 
@@ -129,7 +132,17 @@ class Bridge:
             if kind == "message":
                 await self._forward_to_engine(link, str(body.get("text") or ""))
             elif kind == "media":
-                await self._forward_to_engine(link, _media_label(str(body.get("kind") or "")))
+                media_kind = str(body.get("kind") or "")
+                media_id = str(body.get("media_id") or "")
+                if media_kind == "photo" and media_id:
+                    sent = await self._forward_photo_to_engine(
+                        link,
+                        media_id,
+                        str(body.get("content_type") or "image/jpeg"),
+                    )
+                    if sent:
+                        return
+                await self._forward_to_engine(link, _media_label(media_kind))
             elif kind == "partner_left":
                 await self._stop_engine(link)
 
@@ -185,6 +198,14 @@ class Bridge:
             return
         if kind == "message":
             message = event.get("message") or {}
+            photo_id = str(message.get("photo_id") or "")
+            if message.get("direction") == "in" and photo_id:
+                if link.closing:
+                    return
+                link.state = state
+                if state == "chatting":
+                    await self._forward_photo_to_human(link, photo_id)
+                return
             text = str(message.get("text") or "")
             incoming = message.get("direction") == "in" and bool(text)
             kind_text = classify_engine_text(text) if incoming else "forward"
@@ -254,6 +275,37 @@ class Bridge:
         await self._stop_human_side(link)
         await self._stop_engine(link)
         self.request_reconcile()
+
+    async def _forward_photo_to_human(self, link: AccountLink, photo_id: str) -> None:
+        """Фото из анонимного чата уходит человеку файлом, без подписи «нажмите на фото»."""
+        try:
+            data, content_type = await self._engine.fetch_photo(link.id, photo_id)
+        except EngineError as exc:
+            logger.warning("Не скачал фото аккаунта %s: %s", link.id, exc)
+            return
+        try:
+            delivered = await self._chat_api.send_photo(link.id, data, content_type)
+        except NotChattingError:
+            delivered = False
+        except ChatApiError as exc:
+            logger.warning("Не передал фото аккаунта %s: %s", link.id, exc)
+            return
+        if not delivered:
+            await self._stop_engine(link)
+
+    async def _forward_photo_to_engine(self, link: AccountLink, media_id: str, content_type: str) -> bool:
+        """Фото человека уходит в анонимный чат файлом. False — остаётся текстовая пометка."""
+        try:
+            data, stored_type = await self._chat_api.download_media(media_id)
+        except ChatApiError as exc:
+            logger.warning("Не скачал фото %s для %s: %s", media_id, link.id, exc)
+            return False
+        try:
+            await self._engine.send_photo(link.id, data, stored_type or content_type)
+        except EngineError as exc:
+            logger.warning("chat-engine не принял фото для %s: %s", link.id, exc)
+            await self._stop_human_side(link)
+        return True
 
     async def _forward_to_human(self, link: AccountLink, text: str) -> None:
         try:
