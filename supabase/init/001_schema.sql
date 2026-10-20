@@ -72,6 +72,9 @@ CREATE TABLE IF NOT EXISTS bot_users (
 ALTER TABLE bot_users
     ADD COLUMN IF NOT EXISTS is_premium BOOLEAN NOT NULL DEFAULT FALSE;
 
+ALTER TABLE bot_users
+    ADD COLUMN IF NOT EXISTS premium_until TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS user_channels (
     user_platform TEXT NOT NULL CHECK (user_platform IN ('vk', 'tg', 'web')),
     user_id BIGINT NOT NULL,

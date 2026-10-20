@@ -278,19 +278,19 @@ async def touch_user(conn: AsyncConnection, peer: Peer, handle: str | None = Non
 
 
 async def user_is_premium(conn: AsyncConnection, peer: Peer) -> bool:
-    """Премиум есть только у человека с флагом в bot_users. Аккаунт chat-engine его не имеет."""
+    """Премиум действует, пока не наступила premium_until. Аккаунт chat-engine его не имеет."""
     if peer.is_engine:
         return False
     cursor = await conn.execute(
         """
-        SELECT is_premium
+        SELECT premium_until > NOW() AS active
         FROM bot_users
         WHERE platform = %(platform)s AND user_id = %(user_id)s
         """,
         {"platform": peer.platform, "user_id": peer.user_id},
     )
     row = await cursor.fetchone()
-    return bool(row and row["is_premium"])
+    return bool(row and row["active"])
 
 
 async def record_search(conn: AsyncConnection, peer: Peer) -> None:
