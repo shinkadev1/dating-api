@@ -61,6 +61,7 @@ class MessageOut(BaseModel):
 
 
 MediaKind = Literal["photo", "video", "video_note", "voice"]
+TgSend = Literal["photo", "audio", "voice", "video", "video_note"]
 
 
 class MediaOut(BaseModel):
@@ -82,6 +83,11 @@ class ChatEvent(BaseModel):
     media_id: str | None = Field(None, description="Файл для `media`. Байты забирает бот собеседника")
     kind: MediaKind | None = Field(None, description="Вид файла для `media`")
     content_type: str | None = Field(None, description="MIME для `media`")
+    tg_file_id: str | None = Field(None, description="Файл, который бот Telegram уже получил. Действует только у этого бота")
+    tg_method: TgSend | None = Field(
+        None,
+        description="Как отправить tg_file_id: photo, audio, voice, video или video_note",
+    )
 
 
 class NoticeIn(BaseModel):

@@ -19,6 +19,7 @@ from app.repositories.visitors import save_web_visitor
 from app.schemas import (
     ChatEvent,
     MediaKind,
+    TgSend,
     EngineAttachOut,
     EngineDemandOut,
     LeftReason,
@@ -218,34 +219,60 @@ class ChatService:
         await self._flush(outbox)
         return MessageOut(delivered=False, phase="idle")
 
-    async def forward_media(self, peer: Peer, media_id: UUID, kind: MediaKind, content_type: str) -> None:
-        """Ставит уже сохранённый файл в очередь собеседника.
+    async def forward_media(
+        self,
+        peer: Peer,
+        media_id: UUID | None,
+        kind: MediaKind,
+        content_type: str | None,
+        *,
+        tg_file_id: str | None = None,
+        tg_method: TgSend | None = None,
+    ) -> str:
+        """Ставит файл в очередь собеседника.
 
-        Если пара успела распасться, диалог закрывается так же, как при текстовой реплике.
+        `sent` — событие опубликовано. `left` — пары уже нет, диалог закрыт.
+        `skipped` — байтов нет, а file_id Telegram собеседнику на другой платформе нечего отдать.
         """
         async with self._pool.connection() as conn:
             session = await repo.get_session(conn, peer)
             if session is None or session.phase != "chatting":
-                return
+                return "left"
             partner = await self._linked_partner(conn, peer, session)
         if partner is None:
             outbox: Outbox = []
             async with self._locked() as conn:
                 await self._detach(conn, peer, "stopped", outbox)
             await self._flush(outbox)
-            return
+            return "left"
+        if media_id is None and partner.platform != "tg":
+            logger.info(
+                "Файл Telegram без байтов не уходит %s/%s/%s",
+                partner.platform,
+                partner.bot_key,
+                partner.user_id,
+            )
+            return "skipped"
         await self._events.publish(
             partner,
-            ChatEvent(type="media", media_id=str(media_id), kind=kind, content_type=content_type),
+            ChatEvent(
+                type="media",
+                media_id=str(media_id) if media_id else None,
+                kind=kind,
+                content_type=content_type,
+                tg_file_id=tg_file_id,
+                tg_method=tg_method,
+            ),
         )
         logger.info(
             "Медиа %s (%s) -> %s/%s/%s",
-            media_id,
-            kind,
+            media_id or tg_file_id,
+            tg_method or kind,
             partner.platform,
             partner.bot_key,
             partner.user_id,
         )
+        return "sent"
 
     async def delivery_failed(self, peer: Peer) -> None:
         """Клиент не смог доставить событие этому пользователю: его диалог закрывается."""

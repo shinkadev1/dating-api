@@ -9,10 +9,11 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import Response
 
 from app.deps import Chat, HumanPeer, MediaSvc, ServicePeer
 from app.media_types import MAX_BYTES, MediaRejected
-from app.schemas import MediaKind, MediaOut, MessageIn, MessageOut, StateOut, StopOut, VisitIn
+from app.schemas import MediaKind, MediaOut, MessageIn, MessageOut, StateOut, StopOut, TgSend, VisitIn
 from app.services.chat import NotChattingError
 from app.services.media import StorageDisabled
 from app.services.storage import StorageError
@@ -105,42 +106,98 @@ async def send_message(body: MessageIn, peer: ServicePeer, chat: Chat) -> Messag
     "/media",
     summary="Сохранить медиа",
     responses={
-        status.HTTP_403_FORBIDDEN: {"description": "У пользователя нет премиума"},
+        status.HTTP_204_NO_CONTENT: {"description": "Байтов нет, собеседнику в Telegram ушёл file_id"},
         status.HTTP_409_CONFLICT: {"description": _NOT_CHATTING},
         status.HTTP_413_REQUEST_ENTITY_TOO_LARGE: {"description": "Файл больше предела для этого вида"},
         status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: {"description": "Содержимое не совпало с видом"},
         status.HTTP_502_BAD_GATEWAY: {"description": "Бакет не принял файл"},
         status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "S3 не настроен"},
     },
+    response_model=MediaOut,
 )
 async def store_media(
     peer: ServicePeer,
     chat: Chat,
     media: MediaSvc,
     kind: Annotated[MediaKind, Form(description="photo, video, video_note или voice")],
-    file: Annotated[UploadFile, File(description="Байты фото, видео, кружка или голосового")],
+    file: Annotated[UploadFile | None, File(description="Байты фото, видео, кружка, аудио или голосового")] = None,
+    tg_file_id: Annotated[
+        str | None,
+        Form(description="file_id Telegram. Собеседнику в Telegram уходит исходный файл"),
+    ] = None,
+    tg_method: Annotated[
+        TgSend | None,
+        Form(description="photo, audio, voice, video или video_note"),
+    ] = None,
 ) -> MediaOut:
     """Кладёт файл в S3 и ставит событие `media` собеседнику.
 
-    Фото временно принимается без премиума. Голос и видео — только с ним.
+    Фото, аудио, голос, видео и кружок принимаются без премиума.
     Вид проверяется по байтам файла, а не по имени.
     Байты забирает бот собеседника отдельным запросом.
+    Если байтов нет, но есть file_id Telegram, событие уходит только собеседнику в Telegram:
+    бот не скачивает файл больше 20 МБ, а кружок и голосовое отправляются как есть.
     """
-    if kind != "photo" and not await chat.can_send_media(peer):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Медиа доступно с премиумом")
     if (await chat.state(peer)).phase != "chatting":
         raise HTTPException(status.HTTP_409_CONFLICT, _NOT_CHATTING)
-    raw = await file.read(MAX_BYTES[kind] + 1)
-    try:
-        saved = await media.save(peer, kind, raw)
-    except StorageDisabled as exc:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Хранилище медиа не настроено") from exc
-    except MediaRejected as exc:
-        raise HTTPException(exc.status, exc.detail) from exc
-    except StorageError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Не удалось сохранить файл") from exc
-    await chat.forward_media(peer, saved.id, saved.kind, saved.content_type)
-    return saved
+    file_id, method = _telegram_ref(peer.platform, kind, tg_file_id, tg_method)
+    raw = await file.read(MAX_BYTES[kind] + 1) if file is not None else b""
+    if raw:
+        try:
+            saved = await media.save(peer, kind, raw)
+        except StorageDisabled as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Хранилище медиа не настроено") from exc
+        except MediaRejected as exc:
+            raise HTTPException(exc.status, exc.detail) from exc
+        except StorageError as exc:
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Не удалось сохранить файл") from exc
+        await chat.forward_media(
+            peer,
+            saved.id,
+            saved.kind,
+            saved.content_type,
+            tg_file_id=file_id,
+            tg_method=method,
+        )
+        return saved
+    if file_id is None or method is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Пустой файл")
+    result = await chat.forward_media(
+        peer,
+        None,
+        kind,
+        None,
+        tg_file_id=file_id,
+        tg_method=method,
+    )
+    if result == "left":
+        raise HTTPException(status.HTTP_409_CONFLICT, _NOT_CHATTING)
+    if result != "sent":
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Собеседник этот файл не получит")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _telegram_ref(
+    platform: str,
+    kind: MediaKind,
+    file_id: str | None,
+    method: TgSend | None,
+) -> tuple[str | None, TgSend | None]:
+    """file_id принадлежит боту Telegram и на другие платформы не переносится."""
+    if platform != "tg":
+        return None, None
+    cleaned = (file_id or "").strip()
+    if not cleaned or len(cleaned) > 512:
+        return None, None
+    if kind == "photo":
+        return cleaned, "photo"
+    if kind == "video_note":
+        return cleaned, "video_note"
+    if kind == "video":
+        return cleaned, "video"
+    if method == "audio":
+        return cleaned, "audio"
+    return cleaned, "voice"
 
 
 @router.post("/delivery-failed", status_code=status.HTTP_204_NO_CONTENT, summary="Сообщить о недоставке")

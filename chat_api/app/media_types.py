@@ -55,11 +55,12 @@ def _mp3_frame(data: bytes) -> bool:
     return len(data) >= 2 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0
 
 
-def _ftyp_type(data: bytes) -> str | None:
+def _ftyp_type(data: bytes, kind: str) -> str | None:
     if len(data) < 12 or data[4:8] != b"ftyp":
         return None
     brand = data[8:12]
-    if brand in {b"M4A ", b"M4B "}:
+    # Голосовое и аудио Telegram часто лежат в mp4 с брендом isom или mp42, не M4A.
+    if kind == "voice" or brand in {b"M4A ", b"M4B ", b"M4P "}:
         return "audio/mp4"
     if brand == b"qt  ":
         return "video/quicktime"
@@ -85,7 +86,7 @@ def detect_content_type(kind: str, data: bytes) -> str | None:
     elif data.startswith(b"\x1a\x45\xdf\xa3"):
         found = "audio/webm" if kind == "voice" else "video/webm"
     else:
-        found = _ftyp_type(data)
+        found = _ftyp_type(data, kind)
     if found is None or found not in _KIND_TYPES.get(kind, ()):
         return None
     return found

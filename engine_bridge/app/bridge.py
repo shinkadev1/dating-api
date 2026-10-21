@@ -34,8 +34,10 @@ _MEDIA_LABELS = {
 }
 
 
-def _media_label(kind: str) -> str:
+def _media_label(kind: str, method: str = "") -> str:
     """chat-engine принимает только текст, поэтому файл уходит короткой пометкой."""
+    if kind == "voice" and method == "audio":
+        return "[аудио]"
     return _MEDIA_LABELS.get(kind, "[медиа]")
 
 # Служебные фразы анонимного бота (@AnonRuBot и похожие). Их нельзя отдавать человеку.
@@ -142,7 +144,7 @@ class Bridge:
                     )
                     if sent:
                         return
-                await self._forward_to_engine(link, _media_label(media_kind))
+                await self._forward_to_engine(link, _media_label(media_kind, str(body.get("tg_method") or "")))
             elif kind == "partner_left":
                 await self._stop_engine(link)
 
