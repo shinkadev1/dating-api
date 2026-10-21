@@ -81,17 +81,20 @@ class EngineClient:
             raise EngineError(f"POST photo: HTTP {response.status_code} {response.text}")
 
     async def fetch_photo(self, account: str, photo_id: str) -> tuple[bytes, str]:
+        return await self._download(f"/accounts/{account}/chat/photos/{photo_id}", "image/jpeg")
+
+    async def fetch_video(self, account: str, video_id: str) -> tuple[bytes, str]:
+        return await self._download(f"/accounts/{account}/chat/videos/{video_id}", "video/mp4")
+
+    async def _download(self, path: str, fallback_type: str) -> tuple[bytes, str]:
         try:
-            response = await self._http.get(
-                f"/accounts/{account}/chat/photos/{photo_id}",
-                timeout=90,
-            )
+            response = await self._http.get(path, timeout=180)
         except httpx.HTTPError as exc:
-            raise EngineError(f"GET photo: {type(exc).__name__}: {exc}") from exc
+            raise EngineError(f"GET {path}: {type(exc).__name__}: {exc}") from exc
         if response.is_error:
-            raise EngineError(f"GET photo: HTTP {response.status_code} {response.text}")
-        content_type = response.headers.get("content-type", "image/jpeg").split(";", 1)[0].strip()
-        return response.content, content_type or "image/jpeg"
+            raise EngineError(f"GET {path}: HTTP {response.status_code} {response.text}")
+        content_type = response.headers.get("content-type", fallback_type).split(";", 1)[0].strip()
+        return response.content, content_type or fallback_type
 
     async def events(self, account: str) -> AsyncIterator[dict]:
         """События аккаунта: сначала snapshot, затем state и message. Заканчивается при обрыве."""

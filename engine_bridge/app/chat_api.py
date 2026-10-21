@@ -68,12 +68,26 @@ class ChatApiClient:
 
     async def send_photo(self, account: str, data: bytes, content_type: str) -> bool:
         """Кладёт фото в диалог человека. True, если событие поставлено."""
+        return await self._send_media(account, "photo", data, content_type or "image/jpeg", "photo.jpg")
+
+    async def send_video(self, account: str, data: bytes, content_type: str) -> bool:
+        """Кладёт видео в диалог человека. True, если событие поставлено."""
+        return await self._send_media(account, "video", data, content_type or "video/mp4", "video.mp4")
+
+    async def _send_media(
+        self,
+        account: str,
+        kind: str,
+        data: bytes,
+        content_type: str,
+        filename: str,
+    ) -> bool:
         try:
             response = await self._http.post(
                 self._peer(account, "media"),
-                data={"kind": "photo"},
-                files={"file": ("photo.jpg", data, content_type or "image/jpeg")},
-                timeout=90,
+                data={"kind": kind},
+                files={"file": (filename, data, content_type)},
+                timeout=180,
             )
         except httpx.HTTPError as exc:
             raise ChatApiError(f"POST media: {type(exc).__name__}: {exc}") from exc

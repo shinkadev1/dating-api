@@ -59,8 +59,9 @@ _ENGINE_SYSTEM_RE = re.compile(
     r"t\.me/anon|"
     r"@anonim|"
     r"@anonrusupport|"
-    r"хочет отправить вам фото|"
-    r"нажмите на фото|"
+    r"хочет отправить вам (?:фото|видео)|"
+    r"нажмите на (?:фото|видео)|"
+    r"подпись к (?:фото|видео)|"
     r"не скрывать для этого диалога",
     re.IGNORECASE,
 )
@@ -201,12 +202,15 @@ class Bridge:
         if kind == "message":
             message = event.get("message") or {}
             photo_id = str(message.get("photo_id") or "")
-            if message.get("direction") == "in" and photo_id:
+            video_id = str(message.get("video_id") or "")
+            if message.get("direction") == "in" and (photo_id or video_id):
                 if link.closing:
                     return
                 link.state = state
-                if state == "chatting":
+                if state == "chatting" and photo_id:
                     await self._forward_photo_to_human(link, photo_id)
+                if state == "chatting" and video_id:
+                    await self._forward_video_to_human(link, video_id)
                 return
             text = str(message.get("text") or "")
             incoming = message.get("direction") == "in" and bool(text)
@@ -280,17 +284,31 @@ class Bridge:
 
     async def _forward_photo_to_human(self, link: AccountLink, photo_id: str) -> None:
         """Фото из анонимного чата уходит человеку файлом, без подписи «нажмите на фото»."""
+        await self._forward_file_to_human(link, "photo", photo_id)
+
+    async def _forward_video_to_human(self, link: AccountLink, video_id: str) -> None:
+        """Видео из анонимного чата уходит человеку файлом, без подписи «нажмите на видео»."""
+        await self._forward_file_to_human(link, "video", video_id)
+
+    async def _forward_file_to_human(self, link: AccountLink, kind: str, file_id: str) -> None:
+        label = "видео" if kind == "video" else "фото"
         try:
-            data, content_type = await self._engine.fetch_photo(link.id, photo_id)
+            if kind == "video":
+                data, content_type = await self._engine.fetch_video(link.id, file_id)
+            else:
+                data, content_type = await self._engine.fetch_photo(link.id, file_id)
         except EngineError as exc:
-            logger.warning("Не скачал фото аккаунта %s: %s", link.id, exc)
+            logger.warning("Не скачал %s аккаунта %s: %s", label, link.id, exc)
             return
         try:
-            delivered = await self._chat_api.send_photo(link.id, data, content_type)
+            if kind == "video":
+                delivered = await self._chat_api.send_video(link.id, data, content_type)
+            else:
+                delivered = await self._chat_api.send_photo(link.id, data, content_type)
         except NotChattingError:
             delivered = False
         except ChatApiError as exc:
-            logger.warning("Не передал фото аккаунта %s: %s", link.id, exc)
+            logger.warning("Не передал %s аккаунта %s: %s", label, link.id, exc)
             return
         if not delivered:
             await self._stop_engine(link)
