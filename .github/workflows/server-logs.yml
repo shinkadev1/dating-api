@@ -60,6 +60,11 @@ jobs:
             curl -sS -o /dev/null -w 'HOST GITHUB %{http_code}\n' --max-time 10 https://api.github.com 2>&1 || true
             docker exec vk-engine-bridge python -c 'import httpx; r=httpx.get("https://www.cloudflare.com", timeout=10); print("CONTAINER CLOUDFLARE", r.status_code)' 2>&1 || true
             curl -sS -o /dev/null -w 'HOST CLOUDFLARE %{http_code}\n' --max-time 10 https://www.cloudflare.com 2>&1 || true
+            echo '--- HOST VERSUS CONTAINER ---'
+            getent ahostsv4 bots.chatwithyou.site | head -n 2 || true
+            curl -sS -o /dev/null -w 'HOST ENGINE %{http_code} IP %{remote_ip}\n' --max-time 10 https://bots.chatwithyou.site/health 2>&1 || true
+            docker exec vk-engine-bridge python -c 'import os; print("CONTAINER PROXY VARS", sorted(k for k in os.environ if "proxy" in k.lower()))' 2>&1 || true
+            python3 -c 'import os; print("HOST PROXY VARS", sorted(k for k in os.environ if "proxy" in k.lower()))' 2>&1 || true
             echo '--- LOGS ---'
             docker logs vk-bot --tail 200 2>&1 || true
 
