@@ -54,6 +54,10 @@ jobs:
                 except Exception as exc:
                     print(ip, type(exc).__name__, str(exc), flush=True)
             ' 2>&1 || true
+            echo '--- OTHER HTTPS ROUTES ---'
+            docker exec vk-engine-bridge python -c 'import httpx; r=httpx.get("https://api.github.com", timeout=10); print("CONTAINER GITHUB", r.status_code)' 2>&1 || true
+            curl -sS -o /dev/null -w 'HOST ENGINE %{http_code}\n' --max-time 10 https://bots.chatwithyou.site/health 2>&1 || true
+            curl -sS -o /dev/null -w 'HOST GITHUB %{http_code}\n' --max-time 10 https://api.github.com 2>&1 || true
             echo '--- LOGS ---'
             docker logs vk-bot --tail 200 2>&1 || true
 
