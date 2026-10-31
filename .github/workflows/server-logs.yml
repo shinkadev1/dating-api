@@ -65,6 +65,24 @@ jobs:
             curl -sS -o /dev/null -w 'HOST ENGINE %{http_code} IP %{remote_ip}\n' --max-time 10 https://bots.chatwithyou.site/health 2>&1 || true
             docker exec vk-engine-bridge python -c 'import os; print("CONTAINER PROXY VARS", sorted(k for k in os.environ if "proxy" in k.lower()))' 2>&1 || true
             python3 -c 'import os; print("HOST PROXY VARS", sorted(k for k in os.environ if "proxy" in k.lower()))' 2>&1 || true
+            echo '--- TCP MSS PROBE ---'
+            docker exec vk-engine-bridge python -c '
+            import socket, ssl
+            host = "bots.chatwithyou.site"
+            ip = "172.67.216.125"
+            for mss in (1200, 1000):
+                raw = socket.socket()
+                raw.settimeout(8)
+                try:
+                    raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, mss)
+                    raw.connect((ip, 443))
+                    with ssl.create_default_context().wrap_socket(raw, server_hostname=host) as secure:
+                        print("MSS", mss, "TLS", secure.version(), flush=True)
+                except Exception as exc:
+                    print("MSS", mss, type(exc).__name__, str(exc), flush=True)
+                finally:
+                    raw.close()
+            ' 2>&1 || true
             echo '--- LOGS ---'
             docker logs vk-bot --tail 200 2>&1 || true
 
