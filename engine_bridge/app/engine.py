@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -33,10 +34,15 @@ class EngineClient:
     def __init__(self, base_url: str, token: str, *, timeout: float = 15.0) -> None:
         self._base_url = base_url
         self._token = token
+        # На production-пути к chat-engine TLS 1.3 зависает, а TLS 1.2 проходит.
+        self._ssl_context = ssl.create_default_context()
+        self._ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        self._ssl_context.maximum_version = ssl.TLSVersion.TLSv1_2
         self._http = httpx.AsyncClient(
             base_url=f"{base_url}/api/v1",
             headers={"Authorization": f"Bearer {token}"},
             timeout=timeout,
+            verify=self._ssl_context,
         )
 
     async def aclose(self) -> None:
@@ -99,12 +105,14 @@ class EngineClient:
     async def events(self, account: str) -> AsyncIterator[dict]:
         """События аккаунта: сначала snapshot, затем state и message. Заканчивается при обрыве."""
         url = f"{self._base_url.replace('http', 'ws', 1)}/api/v1/accounts/{account}/chat/ws"
+        ssl_kwargs = {"ssl": self._ssl_context} if url.startswith("wss://") else {}
         async with connect(
             url,
             additional_headers={"Authorization": f"Bearer {self._token}"},
             open_timeout=15,
             ping_interval=20,
             ping_timeout=20,
+            **ssl_kwargs,
         ) as socket:
             async for raw in socket:
                 yield json.loads(raw)
