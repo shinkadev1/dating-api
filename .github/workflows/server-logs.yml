@@ -38,6 +38,9 @@ jobs:
             docker logs vk-chat-api --tail 60 2>&1 || true
             echo '--- ENGINE BRIDGE ---'
             docker logs vk-engine-bridge --tail 80 2>&1 || true
+            echo '--- ENGINE BRIDGE NETWORK ---'
+            docker exec vk-engine-bridge python -c 'import socket; print("DNS", socket.getaddrinfo("bots.chatwithyou.site", 443, type=socket.SOCK_STREAM)[0][4][0])' 2>&1 || true
+            docker exec vk-engine-bridge python -c 'import httpx; r=httpx.get("https://bots.chatwithyou.site/health", timeout=10); print("HTTPS", r.status_code)' 2>&1 || true
             echo '--- LOGS ---'
             docker logs vk-bot --tail 200 2>&1 || true
 
