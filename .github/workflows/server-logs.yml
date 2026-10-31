@@ -86,6 +86,25 @@ jobs:
             echo '--- SAME IMAGE HOST NETWORK ---'
             bridge_image=$(docker inspect vk-engine-bridge --format '{{.Image}}')
             docker run --rm --network host --entrypoint python "$bridge_image" -c 'import httpx; r=httpx.get("https://bots.chatwithyou.site/health", timeout=10); print("HOST NETWORK IMAGE", r.status_code)' 2>&1 || true
+            echo '--- TLS VERSION AND SNI ---'
+            docker exec vk-engine-bridge python -c '
+            import socket, ssl
+            ip = "104.21.24.27"
+            for version in (ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3):
+                for sni in ("bots.chatwithyou.site", None):
+                    context = ssl.create_default_context()
+                    context.minimum_version = version
+                    context.maximum_version = version
+                    if sni is None:
+                        context.check_hostname = False
+                        context.verify_mode = ssl.CERT_NONE
+                    try:
+                        with socket.create_connection((ip,443),timeout=6) as raw:
+                            with context.wrap_socket(raw,server_hostname=sni) as secure:
+                                print("TLS PROBE", version.name, sni or "NO_SNI", secure.version(), flush=True)
+                    except Exception as exc:
+                        print("TLS PROBE", version.name, sni or "NO_SNI", type(exc).__name__, str(exc), flush=True)
+            ' 2>&1 || true
             echo '--- LOGS ---'
             docker logs vk-bot --tail 200 2>&1 || true
 
