@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     s3_access_key: str | None = None
     s3_secret_key: str | None = None
 
+    # Ссылка на оплату премиума. Тот же секрет задан у premium_site.
+    # Без секрета маршрут .../premium/link отвечает 503.
+    premium_link_secret: str | None = Field(None, min_length=32)
+    pay_public_url: str = "https://pay.chatwithyou.site"
+
     @field_validator(
         "chat_api_engine_token",
         "chat_api_tg_token",
@@ -39,6 +44,7 @@ class Settings(BaseSettings):
         "s3_bucket",
         "s3_access_key",
         "s3_secret_key",
+        "premium_link_secret",
         mode="before",
     )
     @classmethod
@@ -56,6 +62,13 @@ class Settings(BaseSettings):
             return "ru1"
         return value.strip()
 
+    @field_validator("pay_public_url", mode="before")
+    @classmethod
+    def _pay_url(cls, value: object) -> object:
+        if not isinstance(value, str) or not value.strip():
+            return "https://pay.chatwithyou.site"
+        return value.strip().rstrip("/")
+
     @field_validator("s3_endpoint_url", mode="after")
     @classmethod
     def _endpoint(cls, value: str | None) -> str | None:
@@ -71,10 +84,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _distinct_tokens(self) -> Settings:
-        optional = [self.chat_api_engine_token, self.chat_api_tg_token]
+        optional = [self.chat_api_engine_token, self.chat_api_tg_token, self.premium_link_secret]
         tokens = [self.chat_api_service_token, self.chat_api_app_token, *filter(None, optional)]
         if len(set(tokens)) != len(tokens):
-            raise ValueError("Токены CHAT_API_*_TOKEN должны различаться")
+            raise ValueError("Токены CHAT_API_*_TOKEN и PREMIUM_LINK_SECRET должны различаться")
         return self
 
 

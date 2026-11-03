@@ -6,14 +6,27 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Annotated
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import Response
 
-from app.deps import Chat, HumanPeer, MediaSvc, ServicePeer
+from app import premium_link
+from app.deps import AppSettings, Chat, HumanPeer, MediaSvc, ServicePeer
 from app.media_types import MAX_BYTES, MediaRejected
-from app.schemas import MediaKind, MediaOut, MessageIn, MessageOut, StateOut, StopOut, TgSend, VisitIn
+from app.schemas import (
+    MediaKind,
+    MediaOut,
+    MessageIn,
+    MessageOut,
+    PremiumLinkOut,
+    StateOut,
+    StopOut,
+    TgSend,
+    VisitIn,
+)
 from app.services.chat import NotChattingError
 from app.services.media import StorageDisabled
 from app.services.storage import StorageError
@@ -107,6 +120,9 @@ async def send_message(body: MessageIn, peer: ServicePeer, chat: Chat) -> Messag
     summary="Сохранить медиа",
     responses={
         status.HTTP_204_NO_CONTENT: {"description": "Байтов нет, собеседнику в Telegram ушёл file_id"},
+        status.HTTP_403_FORBIDDEN: {
+            "description": "Нет премиума у отправителя или у живого собеседника; detail содержит «премиум»"
+        },
         status.HTTP_409_CONFLICT: {"description": _NOT_CHATTING},
         status.HTTP_413_REQUEST_ENTITY_TOO_LARGE: {"description": "Файл больше предела для этого вида"},
         status.HTTP_415_UNSUPPORTED_MEDIA_TYPE: {"description": "Содержимое не совпало с видом"},
@@ -132,7 +148,11 @@ async def store_media(
 ) -> MediaOut:
     """Кладёт файл в S3 и ставит событие `media` собеседнику.
 
-    Фото, аудио, голос, видео и кружок принимаются без премиума.
+    Фото, аудио, голос, видео и кружок уходят, только если премиум есть и у отправителя,
+    и у собеседника. Иначе файл не читается и не сохраняется, ответ 403 с «премиум» в detail:
+    «Фото, видео и аудио можно отправлять только с премиумом» — нет премиума у отправителя,
+    «Собеседник без премиума не может получать медиа» — у живого собеседника.
+    Собеседнику из chat-engine премиум не нужен.
     Вид проверяется по байтам файла, а не по имени.
     Байты забирает бот собеседника отдельным запросом.
     Если байтов нет, но есть file_id Telegram, событие уходит только собеседнику в Telegram:
@@ -140,6 +160,9 @@ async def store_media(
     """
     if (await chat.state(peer)).phase != "chatting":
         raise HTTPException(status.HTTP_409_CONFLICT, _NOT_CHATTING)
+    blocked = await chat.media_block_reason(peer)
+    if blocked is not None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, blocked)
     file_id, method = _telegram_ref(peer.platform, kind, tg_file_id, tg_method)
     raw = await file.read(MAX_BYTES[kind] + 1) if file is not None else b""
     if raw:
@@ -175,6 +198,30 @@ async def store_media(
     if result != "sent":
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Собеседник этот файл не получит")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/premium/link",
+    summary="Ссылка на оплату премиума",
+    responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "PREMIUM_LINK_SECRET не задан"}},
+)
+async def premium_pay_link(peer: HumanPeer, chat: Chat, settings: AppSettings) -> PremiumLinkOut:
+    """Адрес страницы оплаты для этого пользователя и текущий срок премиума.
+
+    Пользователь передаётся в `utm_content` подписанным и зашифрованным токеном (около 7 дней),
+    открытого id в адресе нет. Страница оплаты по нему входит без email.
+    Покупка привязана к аккаунту платформы, а не к боту: `bot_key` в токен не входит.
+    """
+    if not settings.premium_link_secret:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Оплата премиума не настроена")
+    token = premium_link.sign(peer.platform, peer.user_id, settings.premium_link_secret)
+    query = urlencode({"utm_source": peer.platform, "utm_campaign": "premium", "utm_content": token})
+    until = await chat.premium_until(peer)
+    return PremiumLinkOut(
+        url=f"{settings.pay_public_url}/?{query}",
+        premium_active=bool(until and until > datetime.now(timezone.utc)),
+        premium_until=until,
+    )
 
 
 def _telegram_ref(
