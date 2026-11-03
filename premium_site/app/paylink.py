@@ -74,6 +74,12 @@ def sign(
     return VERSION + base64.urlsafe_b64encode(body + tag).rstrip(b"=").decode()
 
 
+def nonce(token: str) -> bytes:
+    """Случайная часть токена: по ней страница оплаты пускает по ссылке один раз. Только после verify()."""
+    encoded = token[len(VERSION) :]
+    return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))[:_NONCE]
+
+
 def verify(token: str, secret: str, *, now: int | None = None) -> tuple[str, int]:
     """Возвращает (platform, user_id) или бросает InvalidLinkToken."""
     if not secret or not token or len(token) > _MAX_TOKEN or not token.startswith(VERSION):

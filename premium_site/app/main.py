@@ -28,11 +28,11 @@ async def private_pages(request,call_next):
     response.headers['X-Content-Type-Options']='nosniff'
     return response
 
-def page(request,name,context=None):
+def page(request,name,context=None,status=200):
     owner=identity.session(request)
     token=None
     if not owner: token,owner=identity.new_session()
-    response=templates.TemplateResponse(request,name,{'owner':owner,'csrf':owner['csrf'],**(context or {})})
+    response=templates.TemplateResponse(request,name,{'owner':owner,'csrf':owner['csrf'],'profile':identity.profile_label(owner),**(context or {})},status_code=status)
     return identity.cookie(response,token) if token else response
 
 def owner(request):
@@ -44,7 +44,7 @@ def owner(request):
 def health(): return {'status':'ok'}
 
 @app.get('/')
-def offer(request:Request,plan:str='',utm_content:str=''):
+def offer(request:Request,plan:str='',utm_content:str='',link:str=''):
     selected=billing.ALIASES.get(plan,plan)
     if selected and selected not in billing.PLANS: raise HTTPException(422,'Неизвестный тариф')
     if utm_content:
@@ -54,8 +54,10 @@ def offer(request:Request,plan:str='',utm_content:str=''):
         result,value=identity.link_login(request,utm_content)
         if result=='confirm':
             return page(request,'confirm.html',{'platform':PLATFORM_NAMES.get(value,value),'token':utm_content,'plan':plan})
+        if result==identity.LINK_USED: return RedirectResponse('/?link=used',303)
         return link_redirect(plan,value)
-    return page(request,'index.html',{'plans':billing.PLANS,'selected':selected,'request_key':str(uuid4())})
+    hint='Ссылка уже использована, запросите новую в чате' if link=='used' else None
+    return page(request,'index.html',{'plans':billing.PLANS,'selected':selected,'request_key':str(uuid4()),'hint':hint})
 
 PLATFORM_NAMES={'vk':'ВКонтакте','tg':'Telegram','web':'на сайте'}
 
@@ -68,18 +70,28 @@ def confirm_link(request:Request,csrf:str=Form(),token:str=Form(max_length=256),
     identity.csrf(request,csrf)
     result,value=identity.link_login(request,token,confirmed=True)
     if result=='invalid': raise HTTPException(409,'Ссылка из чата недействительна или устарела; запросите новую у бота')
+    if result==identity.LINK_USED: return RedirectResponse('/?link=used',303)
     return link_redirect(billing.ALIASES.get(plan,plan) if billing.ALIASES.get(plan,plan) in billing.PLANS else '',value)
 
 @app.post('/auth/request')
-def request_code(request:Request,csrf:str=Form(),email:str=Form()):
+def request_code(request:Request,csrf:str=Form(),email:str=Form(),attach:str=Form(default='')):
     current=identity.csrf(request,csrf)
-    identity.request_code(current,email,request.client.host if request.client else 'unknown')
+    try: result=identity.request_code(current,email,request.client.host if request.client else 'unknown',attach=attach=='yes')
+    except HTTPException as exc:
+        if exc.detail==identity.EMAIL_TAKEN: return page(request,'notice.html',{'message':exc.detail},409)
+        raise
+    if result=='confirm':
+        # Explicit, CSRF-protected step: the email is attached to the chat profile that opened this page.
+        return page(request,'attach.html',{'email':identity.normalize_email(email)})
     return page(request,'verify.html',{'message':'Код отправлен на email'})
 
 @app.post('/auth/verify')
 def verify(request:Request,csrf:str=Form(),code:str=Form()):
     current=identity.csrf(request,csrf)
-    token=identity.verify_code(current,code.strip())
+    try: token=identity.verify_code(current,code.strip())
+    except HTTPException as exc:
+        if exc.detail==identity.EMAIL_TAKEN: return page(request,'notice.html',{'message':exc.detail},409)
+        raise
     return identity.cookie(RedirectResponse('/account',303),token)
 
 @app.post('/auth/logout')

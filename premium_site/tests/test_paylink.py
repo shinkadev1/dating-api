@@ -87,6 +87,7 @@ class LinkLoginTests(unittest.TestCase):
     def test_valid_link_sets_session_and_strips_token(self):
         account = uuid4()
         with patch.object(identity, 'platform_account', return_value=account) as found, \
+             patch.object(identity, 'consume_link_nonce', return_value=True), \
              patch.object(identity, 'session', return_value=None), \
              patch.object(identity, 'new_session', return_value=('session-token', {})) as created:
             response = self.client.get('/', params={'utm_source': 'vk', 'utm_campaign': 'premium', 'utm_content': paylink.sign('vk', 9, SECRET), 'plan': 'week'}, follow_redirects=False)
@@ -94,7 +95,46 @@ class LinkLoginTests(unittest.TestCase):
         self.assertEqual(response.headers['location'], '/?plan=week')
         self.assertIn(identity.COOKIE + '=session-token', response.headers['set-cookie'])
         found.assert_called_once_with('vk', 9)
-        created.assert_called_once_with(account, via_link=True)
+        created.assert_called_once_with(account, via_link=True, profile=('vk', 9))
+
+    def test_reused_link_is_rejected_with_hint(self):
+        with patch.object(identity, 'consume_link_nonce', return_value=False), \
+             patch.object(identity, 'session', return_value=None), \
+             patch.object(identity, 'platform_account') as found, \
+             patch.object(identity, 'new_session') as created:
+            response = self.client.get('/', params={'utm_content': paylink.sign('vk', 9, SECRET)}, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers['location'], '/?link=used')
+        found.assert_not_called(); created.assert_not_called()
+        anonymous = {'account_id': None, 'email': None, 'via_link': False, 'csrf': 'c'}
+        with patch.object(identity, 'session', return_value=anonymous):
+            self.assertIn('Ссылка уже использована, запросите новую в чате', self.client.get('/?link=used').text)
+
+    def test_link_session_shows_masked_profile(self):
+        owner = {'account_id': uuid4(), 'email': None, 'via_link': True, 'csrf': 'c', 'premium_until': None, 'link_platform': 'vk', 'link_user_id': 208891943}
+        self.assertEqual(identity.profile_label(owner), 'VK ••••1943')
+        with patch.object(identity, 'session', return_value=owner):
+            text = self.client.get('/').text
+        self.assertIn('Премиум для профиля VK ••••1943 из чата', text)
+        self.assertIn('для профиля VK ••••1943', text)
+        self.assertNotIn('208891943', text)
+
+    def test_link_session_email_needs_attach_confirmation(self):
+        owner = {'account_id': uuid4(), 'email': None, 'via_link': True, 'csrf': 'c', 'premium_until': None, 'link_platform': 'tg', 'link_user_id': 5551234}
+        with patch.object(identity, 'session', return_value=owner), patch.object(identity, 'request_code', return_value='confirm') as sent:
+            response = self.client.post('/auth/request', data={'csrf': 'c', 'email': 'Me@Example.test'})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Привязать email <strong>me@example.test</strong> к профилю Telegram ••••1234 из чата?', response.text)
+        self.assertIn('name="attach" value="yes"', response.text)
+        self.assertEqual(sent.call_args.kwargs['attach'], False)
+
+    def test_taken_email_from_link_session_is_refused_page(self):
+        owner = {'account_id': uuid4(), 'email': None, 'via_link': True, 'csrf': 'c', 'premium_until': None, 'link_platform': 'vk', 'link_user_id': 1}
+        with patch.object(identity, 'session', return_value=owner), \
+             patch.object(identity, 'verify_code', side_effect=identity.HTTPException(409, identity.EMAIL_TAKEN)):
+            response = self.client.post('/auth/verify', data={'csrf': 'c', 'code': '123456'})
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('используйте команду /link в чате', response.text)
 
     def test_same_account_keeps_session(self):
         account = uuid4()
@@ -114,6 +154,7 @@ class LinkLoginTests(unittest.TestCase):
         with patch.object(identity, 'identity_account', return_value=uuid4()), \
              patch.object(identity, 'session', return_value=current), \
              patch.object(identity, 'platform_account') as found, \
+             patch.object(identity, 'consume_link_nonce', return_value=True), \
              patch.object(identity, 'new_session') as created:
             page = self.client.get('/', params={'utm_content': token}, follow_redirects=False)
             self.assertEqual(page.status_code, 200)
@@ -128,7 +169,7 @@ class LinkLoginTests(unittest.TestCase):
         self.assertEqual(ok.status_code, 303)
         self.assertEqual(ok.headers['location'], '/?plan=month')
         self.assertIn(identity.COOKIE + '=switched', ok.headers['set-cookie'])
-        created.assert_called_once_with(account, via_link=True)
+        created.assert_called_once_with(account, via_link=True, profile=('vk', 9))
 
     def test_invalid_link_falls_back_without_account(self):
         with patch.object(identity, 'platform_account') as found:

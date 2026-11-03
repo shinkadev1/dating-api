@@ -104,11 +104,12 @@ def create_order(uid,plan,key,email,renew=False,via_link=False):
             if not renew and owner['premium_until'] and owner['premium_until']>datetime.now(timezone.utc): raise HTTPException(409,'Подписка уже оплачена')
             if plan=='trial' and owner['trial_used']: raise HTTPException(409,'Пробный период уже использован')
             if renew and (not sub or not sub['auto_renew'] or not sub['method_id'] or sub['period_end']>datetime.now(timezone.utc)): return None
+            if not renew and via_link and sub and sub['method_id']: raise HTTPException(409,'У подписки сохранена карта. Изменить тариф можно после входа по email')
             order={'id':uuid4(),'plan_id':plan,'amount_rub':PLANS[plan][2]}
             body=payload(order,email,sub['method_id'] if renew else None)
             row=c.execute("INSERT INTO premium_orders(id,account_id,amount_rub,period_hours,status,plan_id,request_key,payload) VALUES(%s,%s,%s,%s,'pending',%s,%s,%s) RETURNING *",(order['id'],uid,order['amount_rub'],PLANS[plan][1]*24,plan,key,Jsonb(body))).fetchone()
             if not renew:
-                c.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,created_via_link) VALUES(%s,%s,%s,'2026-11-02',%s) ON CONFLICT(account_id) DO UPDATE SET plan_id=EXCLUDED.plan_id,email=EXCLUDED.email,auto_renew=TRUE,method_id=NULL,consent_version=EXCLUDED.consent_version,created_via_link=EXCLUDED.created_via_link",(uid,plan,email,via_link))
+                c.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,created_via_link) VALUES(%s,%s,%s,'2026-11-02',%s) ON CONFLICT(account_id) DO UPDATE SET plan_id=EXCLUDED.plan_id,email=EXCLUDED.email,auto_renew=TRUE,method_id=NULL,consent_version=EXCLUDED.consent_version,created_via_link=premium_subscriptions.created_via_link AND EXCLUDED.created_via_link",(uid,plan,email,via_link))
             return row
 
 def process(order_id,provider=None):
@@ -155,6 +156,9 @@ def tick():
         except HTTPException: pass
     with connect() as c:
         with c.transaction(): sync_bot_users(c)  # Repairs access if a sync was ever missed.
+        # Used chat-link nonces only matter while a token can still be valid (24h + clock skew).
+        if c.execute("SELECT to_regclass('premium_link_nonces') IS NOT NULL AS ok").fetchone()['ok']:
+            c.execute("DELETE FROM premium_link_nonces WHERE created_at<NOW()-INTERVAL '25 hours'")
         due=c.execute('SELECT * FROM premium_subscriptions WHERE auto_renew AND method_id IS NOT NULL AND period_end<=NOW()').fetchall()
     for sub in due:
         try:
