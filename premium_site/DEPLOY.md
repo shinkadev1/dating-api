@@ -1,6 +1,11 @@
 # Запуск оплаты премиума: чек-лист
 
-Страница оплаты (premium_site, ЮKassa) поднимается тем же деплоем, что и Chat API: push в `master` → `.github/workflows/deploy.yml` собирает образ `dating-premium` → `deploy/update.sh` на сервере. Включается сама, когда в секрете `ENV_FILE` есть `PREMIUM_LINK_SECRET` и `YOOKASSA_SHOP_ID`. Без них всё работает как раньше, только контейнеров оплаты нет.
+Страница оплаты (premium_site, ЮKassa) поднимается тем же деплоем, что и Chat API: push в `master` → `.github/workflows/deploy.yml` собирает образ `dating-premium` → `deploy/update.sh` на сервере. Включается переключателем `PAYMENTS_ENABLED=true|false` в секрете `ENV_FILE`. Если его нет, оплата включается, когда в `ENV_FILE` (или в отдельных секретах GitHub) есть `PREMIUM_LINK_SECRET` и `YOOKASSA_SHOP_ID`. `.env` на сервере на это решение не влияет. Без оплаты всё работает как раньше, только контейнеров оплаты нет.
+
+До любых действий с контейнерами деплой проверяет секреты и останавливается с понятной ошибкой, если:
+- `PREMIUM_LINK_SECRET` или `PAY_AUTH_SECRET` короче 32 символов;
+- `PREMIUM_LINK_SECRET` совпадает с одним из токенов `CHAT_API_*`;
+- `PREM_SERVICE_*` короче 32 символов или совпадают друг с другом.
 
 **Важно:** запрет медиа без премиума действует сразу после деплоя этой ветки и для всех. Поэтому сначала проверьте, что оплата работает, и только потом выкатывайте ботов с кнопкой оплаты.
 
@@ -13,6 +18,8 @@
 ## 2. Секрет ENV_FILE (GitHub → Settings → Secrets → Actions)
 
 Здесь только имена. Значения не храните в репозитории и не пересылайте в чатах.
+
+Переключатель: `PAYMENTS_ENABLED=true` (рекомендуется задавать явно).
 
 Обязательные для оплаты:
 - `PREMIUM_LINK_SECRET`: не короче 32 символов. Тот же секрет подписывает ссылки в Chat API.
@@ -48,6 +55,8 @@
 
 `YOOKASSA_WEBHOOK_IPS` можно включить позже, когда в логах видны настоящие IP уведомлений. Вебхук и без списка ничего не начисляет сам: он только перечитывает платёж через API ЮKassa.
 
+Порт хоста: `premium` публикуется только на `127.0.0.1:18080` для отладки с самого сервера (`curl http://127.0.0.1:18080/health`). Туннелю он не нужен: cloudflared ходит к `premium:8000` по сети Compose.
+
 ## 6. Порядок выкладки
 
 1. **vk-bot** (эта ветка → `master`). Деплой поднимает chat-api, `premium` и `premium-scheduler`. Проверьте в логах деплоя «Страница оплаты доверяет X-Forwarded-For…» и `Application startup` у `vk-premium-web`. Затем откройте `https://pay.chatwithyou.site/health` — должно прийти `{"status":"ok"}`.
@@ -69,6 +78,6 @@
 
 ## 9. Откат
 
-- **Выключить оплату:** удалите `PREMIUM_LINK_SECRET` (или `YOOKASSA_SHOP_ID`) из ENV_FILE и перезапустите деплой. Контейнеры `vk-premium-web` и `vk-premium-scheduler` будут удалены, а `/premium/link` начнёт отвечать 503. Запрет медиа при этом останется: он в коде Chat API.
+- **Выключить оплату:** поставьте `PAYMENTS_ENABLED=false` в ENV_FILE и перезапустите деплой (Actions → Deploy → Re-run). Деплой удалит контейнеры `vk-premium-web` и `vk-premium-scheduler` и уберёт из `.env` сервера `PREMIUM_LINK_SECRET`, `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY`, `PAY_AUTH_SECRET`, `RESEND_API_KEY`, `YOOKASSA_WEBHOOK_IPS` и `PREMIUM_FORWARDED_ALLOW_IPS`. После этого `/premium/link` в Chat API отвечает 503. Значения в ENV_FILE можно оставить: при `PAYMENTS_ENABLED=true` оплата включится снова. Запрет медиа при этом останется: он в коде Chat API.
 - **Вернуть медиа без премиума:** задеплойте предыдущий коммит `master` (revert merge-коммита ветки `payments` и push). Таблицы оплаты и `bot_users.premium_until` останутся в базе и при повторном включении продолжат работать.
 - Hostname `pay.chatwithyou.site` в туннеле можно оставить: без контейнера он отвечает 502.

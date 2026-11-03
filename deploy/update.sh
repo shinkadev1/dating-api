@@ -87,17 +87,23 @@ drop_env() {
   chmod 600 .env
 }
 
-# Значение без записи в .env: переменная окружения, ENV_FILE или .env.
-lookup() {
+# Значение из окружения деплоя (секреты GitHub) или ENV_FILE, без .env сервера и без записи.
+deploy_value() {
   key=$1
   eval "value=\${$key:-}"
   if [ -z "$value" ]; then
     value=$(secret_value "$key")
   fi
-  if [ -z "$value" ]; then
-    value=$(sed -n "s/^${key}=//p" .env | tail -n 1)
-  fi
   printf '%s' "$value"
+}
+
+env_value() {
+  sed -n "s/^$1=//p" .env | tail -n 1
+}
+
+fail() {
+  echo "$1" >&2
+  exit 1
 }
 
 # Ключ из секретов или .env, иначе значение по умолчанию.
@@ -138,6 +144,7 @@ fi
 # Мост к chat-engine запускается, только если есть токен chat-engine.
 profiles=proxy
 optional_services=""
+remove_containers=""
 if optional_secret CHAT_ENGINE_TOKEN; then
   ensure_secret CHAT_API_ENGINE_TOKEN
   profiles="${profiles},engine"
@@ -145,17 +152,26 @@ if optional_secret CHAT_ENGINE_TOKEN; then
 else
   echo "Нет CHAT_ENGINE_TOKEN: собеседники из chat-engine не подключаются."
   drop_env CHAT_API_ENGINE_TOKEN
-  docker rm -f vk-engine-bridge >/dev/null 2>&1 || true
+  remove_containers="vk-engine-bridge"
 fi
-# Страница оплаты (premium_site) включается, когда заданы PREMIUM_LINK_SECRET и YOOKASSA_SHOP_ID.
-payments=0
-if [ -n "$(lookup PREMIUM_LINK_SECRET)" ] && [ -n "$(lookup YOOKASSA_SHOP_ID)" ]; then
-  payments=1
-fi
+
+# Страница оплаты (premium_site). Решают только секреты деплоя (окружение и ENV_FILE), не .env сервера:
+# PAYMENTS_ENABLED=true|false, а без него — наличие PREMIUM_LINK_SECRET и YOOKASSA_SHOP_ID.
+case $(deploy_value PAYMENTS_ENABLED | tr '[:upper:]' '[:lower:]') in
+  true|1|yes) payments=1 ;;
+  false|0|no) payments=0 ;;
+  "")
+    if [ -n "$(deploy_value PREMIUM_LINK_SECRET)" ] && [ -n "$(deploy_value YOOKASSA_SHOP_ID)" ]; then
+      payments=1
+    else
+      payments=0
+    fi
+    ;;
+  *) fail "PAYMENTS_ENABLED должен быть true или false." ;;
+esac
 if [ "$payments" -eq 1 ]; then
   if [ -z "${PREMIUM_IMAGE:-}" ]; then
-    echo "Не задан PREMIUM_IMAGE." >&2
-    exit 1
+    fail "Не задан PREMIUM_IMAGE."
   fi
   require_secret PREMIUM_LINK_SECRET
   require_secret PAY_AUTH_SECRET
@@ -185,10 +201,44 @@ if [ "$payments" -eq 1 ]; then
   export COMPOSE_FILE="docker-compose.yml:docker-compose.payments.yml"
   export PREMIUM_IMAGE
 else
-  echo "Нет PREMIUM_LINK_SECRET или YOOKASSA_SHOP_ID: страница оплаты не запускается."
-  drop_env PREMIUM_LINK_SECRET
+  echo "Оплата выключена: страница оплаты не запускается, ссылка на оплату отвечает 503."
+  # Ключи доступа к оплате убираем из .env, чтобы выключение было настоящим и при ручном запуске.
+  for key in PREMIUM_LINK_SECRET YOOKASSA_SHOP_ID YOOKASSA_SECRET_KEY PAY_AUTH_SECRET RESEND_API_KEY YOOKASSA_WEBHOOK_IPS PREMIUM_FORWARDED_ALLOW_IPS; do
+    drop_env "$key"
+  done
   unset COMPOSE_FILE
-  docker rm -f vk-premium-web vk-premium-scheduler >/dev/null 2>&1 || true
+  remove_containers="${remove_containers} vk-premium-web vk-premium-scheduler"
+fi
+
+# Проверка секретов до любых действий с контейнерами: иначе chat-api или premium упадут на старте.
+min_length() {
+  value=$(env_value "$1")
+  if [ "${#value}" -lt 32 ]; then
+    fail "$1 должен быть не короче 32 символов."
+  fi
+}
+if [ "$payments" -eq 1 ]; then
+  min_length PREMIUM_LINK_SECRET
+  min_length PAY_AUTH_SECRET
+  link_secret=$(env_value PREMIUM_LINK_SECRET)
+  for key in CHAT_API_SERVICE_TOKEN CHAT_API_APP_TOKEN CHAT_API_TG_TOKEN CHAT_API_ENGINE_TOKEN; do
+    if [ "$(env_value "$key")" = "$link_secret" ]; then
+      fail "PREMIUM_LINK_SECRET должен отличаться от ${key}."
+    fi
+  done
+  for key in PREM_SERVICE_VK_TOKEN PREM_SERVICE_TG_TOKEN PREM_SERVICE_WEB_TOKEN; do
+    min_length "$key"
+  done
+  if [ "$(env_value PREM_SERVICE_VK_TOKEN)" = "$(env_value PREM_SERVICE_TG_TOKEN)" ] ||
+     [ "$(env_value PREM_SERVICE_VK_TOKEN)" = "$(env_value PREM_SERVICE_WEB_TOKEN)" ] ||
+     [ "$(env_value PREM_SERVICE_TG_TOKEN)" = "$(env_value PREM_SERVICE_WEB_TOKEN)" ]; then
+    fail "PREM_SERVICE_VK_TOKEN, PREM_SERVICE_TG_TOKEN и PREM_SERVICE_WEB_TOKEN должны различаться."
+  fi
+fi
+
+if [ -n "$remove_containers" ]; then
+  # shellcheck disable=SC2086 # список контейнеров разделён пробелами
+  docker rm -f $remove_containers >/dev/null 2>&1 || true
 fi
 export COMPOSE_PROFILES="$profiles"
 for stale in STUDIO_HOST PAY_HOST API_HOST CORS_ORIGINS PREMIUM_URL PREMIUM_PUBLISH WEB_GATEWAY_PUBLISH WEB_GATEWAY_IMAGE VK_TOKEN VK_TOKENS TG_TOKEN TG_TOKENS TELEGRAM_BOT_TOKEN GUEST_JWT_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do

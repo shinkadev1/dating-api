@@ -29,8 +29,10 @@ services:
     container_name: vk-premium-web
     profiles: ["payments"]
     restart: unless-stopped
+    # cloudflared ходит к premium:8000 по сети Compose, порт хоста ему не нужен. Публикация только для
+    # отладки с самого сервера и на редком loopback-порту, чтобы не столкнуться с другими сервисами.
     ports:
-      - "${PREMIUM_PUBLISH:-127.0.0.1:8080}:8000"
+      - "${PREMIUM_PUBLISH:-127.0.0.1:18080}:8000"
     environment:
       <<: *pay-env
       # Кому верить в X-Forwarded-For (адреса через запятую). По умолчанию никому снаружи контейнера:
