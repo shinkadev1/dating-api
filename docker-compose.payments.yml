@@ -20,6 +20,7 @@ x-pay-env: &pay-env
   YOOKASSA_RECEIPT_MODE: ${YOOKASSA_RECEIPT_MODE:-}
   YOOKASSA_VAT_CODE: ${YOOKASSA_VAT_CODE:-}
   YOOKASSA_PAYMENT_SUBJECT: ${YOOKASSA_PAYMENT_SUBJECT:-}
+  YOOKASSA_WEBHOOK_IPS: ${YOOKASSA_WEBHOOK_IPS:-}
 
 services:
   premium:
@@ -32,6 +33,11 @@ services:
       - "${PREMIUM_PUBLISH:-127.0.0.1:8080}:8000"
     environment:
       <<: *pay-env
+      # Кому верить в X-Forwarded-For. Порт по умолчанию открыт только на 127.0.0.1, и до контейнера
+      # доходит лишь прокси хоста или туннель, причём с адреса шлюза Docker, который меняется от сети
+      # к сети. Поэтому "*". Если PREMIUM_PUBLISH открывает порт наружу, укажите адрес прокси,
+      # иначе клиент подделает свой IP и обойдёт лимит писем и список IP вебхука.
+      FORWARDED_ALLOW_IPS: ${PREMIUM_FORWARDED_ALLOW_IPS:-*}
     depends_on:
       db:
         condition: service_healthy
