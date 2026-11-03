@@ -16,7 +16,7 @@ import os
 import time
 
 VERSION = "1"
-TTL_SECONDS = 7 * 24 * 3600
+TTL_SECONDS = 24 * 3600
 PLATFORMS = frozenset({"vk", "tg", "web"})
 _NONCE = 12
 _TAG = 16

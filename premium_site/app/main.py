@@ -1,4 +1,5 @@
 """Existing FastAPI/Jinja pay site, verified email and YooKassa subscription UI."""
+import ipaddress
 import os
 from pathlib import Path
 from urllib.parse import urlencode
@@ -49,11 +50,25 @@ def offer(request:Request,plan:str='',utm_content:str=''):
     if utm_content:
         # A signed link from a chat bot signs the user in for this platform account; the redirect
         # drops the token from the address bar and history. Invalid links fall back to email login.
-        token=identity.link_login(request,utm_content)
-        target='/'+('?'+urlencode({'plan':plan}) if plan else '')
-        response=RedirectResponse(target,303)
-        return identity.cookie(response,token) if token else response
+        # Another signed-in account is switched only after a CSRF-protected confirmation.
+        result,value=identity.link_login(request,utm_content)
+        if result=='confirm':
+            return page(request,'confirm.html',{'platform':PLATFORM_NAMES.get(value,value),'token':utm_content,'plan':plan})
+        return link_redirect(plan,value)
     return page(request,'index.html',{'plans':billing.PLANS,'selected':selected,'request_key':str(uuid4())})
+
+PLATFORM_NAMES={'vk':'ВКонтакте','tg':'Telegram','web':'на сайте'}
+
+def link_redirect(plan,token):
+    response=RedirectResponse('/'+('?'+urlencode({'plan':plan}) if plan else ''),303)
+    return identity.cookie(response,token) if token else response
+
+@app.post('/auth/link')
+def confirm_link(request:Request,csrf:str=Form(),token:str=Form(max_length=256),plan:str=Form(default='')):
+    identity.csrf(request,csrf)
+    result,value=identity.link_login(request,token,confirmed=True)
+    if result=='invalid': raise HTTPException(409,'Ссылка из чата недействительна или устарела; запросите новую у бота')
+    return link_redirect(billing.ALIASES.get(plan,plan) if billing.ALIASES.get(plan,plan) in billing.PLANS else '',value)
 
 @app.post('/auth/request')
 def request_code(request:Request,csrf:str=Form(),email:str=Form()):
@@ -80,7 +95,11 @@ def account(request:Request):
         subscription=c.execute('SELECT * FROM premium_subscriptions WHERE account_id=%s',(current['account_id'],)).fetchone()
         orders=c.execute('SELECT * FROM premium_orders WHERE account_id=%s ORDER BY created_at DESC LIMIT 20',(current['account_id'],)).fetchall()
         links=c.execute('SELECT platform,user_id FROM premium_identities WHERE account_id=%s',(current['account_id'],)).fetchall()
-    return page(request,'account.html',{'subscription':subscription,'orders':orders,'links':links})
+    return page(request,'account.html',{'subscription':subscription,'orders':orders,'links':links,'can_cancel':can_cancel(current,subscription)})
+
+def can_cancel(current,subscription):
+    """A chat-link session may not cancel a subscription that was started after email sign-in."""
+    return bool(subscription) and (not current['via_link'] or subscription['created_via_link'])
 
 @app.post('/account/link-codes')
 def link_code(request:Request,csrf:str=Form(),platform:str=Form()):
@@ -92,6 +111,8 @@ def link_code(request:Request,csrf:str=Form(),platform:str=Form()):
 @app.post('/subscription/cancel')
 def cancel(request:Request,csrf:str=Form()):
     current=identity.csrf(request,csrf,True)
+    with billing.connect() as c: subscription=c.execute('SELECT * FROM premium_subscriptions WHERE account_id=%s',(current['account_id'],)).fetchone()
+    if subscription and not can_cancel(current,subscription): raise HTTPException(403,'Отключите автопродление после входа по email')
     billing.cancel(current['account_id'])
     return RedirectResponse('/account',303)
 
@@ -99,7 +120,7 @@ def cancel(request:Request,csrf:str=Form()):
 def checkout(request:Request,csrf:str=Form(),plan:str=Form(),request_key:UUID=Form(),consent:str=Form(default='')):
     current=identity.csrf(request,csrf,True)
     if consent!='2026-11-02': raise HTTPException(422,'Подтвердите условия автопродления')
-    order=billing.create_order(current['account_id'],plan,request_key,current['email'])
+    order=billing.create_order(current['account_id'],plan,request_key,current['email'],via_link=current['via_link'])
     try: billing.process(order['id'])
     except HTTPException: pass  # The durable order remains accessible for reconciliation.
     return RedirectResponse('/orders/'+str(order['id']),303)
@@ -143,8 +164,24 @@ class Notification(BaseModel):
     event:str
     object:dict
 
+def webhook_networks():
+    """Optional allowlist from YOOKASSA_WEBHOOK_IPS (comma-separated IPs/CIDRs). Empty = off: the webhook
+    only triggers a re-read of the payment from the YooKassa API, so a forged call grants nothing."""
+    networks=[]
+    for item in os.getenv('YOOKASSA_WEBHOOK_IPS','').split(','):
+        if item.strip(): networks.append(ipaddress.ip_network(item.strip(),strict=False))
+    return networks
+
+def webhook_allowed(host):
+    networks=webhook_networks()
+    if not networks: return True
+    try: address=ipaddress.ip_address(host)
+    except ValueError: return False
+    return any(address in network for network in networks)
+
 @app.post('/webhooks/yookassa')
-def webhook(body:Notification):
+def webhook(request:Request,body:Notification):
+    if not webhook_allowed(request.client.host if request.client else ''): raise HTTPException(403,'Недопустимый источник уведомления')
     if body.type!='notification' or body.event not in ('payment.succeeded','payment.canceled','payment.waiting_for_capture'): return {'ok':True}
     try: payment_id=UUID(str(body.object.get('id')))
     except ValueError: raise HTTPException(422,'Некорректный платёж')

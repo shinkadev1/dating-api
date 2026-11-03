@@ -50,6 +50,9 @@ def schema():
             c.execute('CREATE UNIQUE INDEX IF NOT EXISTS premium_payment_id ON premium_orders(payment_id)')
             c.execute('CREATE UNIQUE INDEX IF NOT EXISTS premium_request_key ON premium_orders(account_id,request_key)')
             c.execute("CREATE TABLE IF NOT EXISTS premium_subscriptions(account_id UUID PRIMARY KEY REFERENCES premium_accounts(id),plan_id TEXT NOT NULL,auto_renew BOOLEAN NOT NULL DEFAULT TRUE,trial_used BOOLEAN NOT NULL DEFAULT FALSE,method_id TEXT,period_end TIMESTAMPTZ,consent_version TEXT NOT NULL,email TEXT NOT NULL)")
+            c.execute('ALTER TABLE premium_subscriptions ALTER COLUMN email DROP NOT NULL')
+            # A subscription started from an email session cannot be cancelled from a chat-link session.
+            c.execute('ALTER TABLE premium_subscriptions ADD COLUMN IF NOT EXISTS created_via_link BOOLEAN NOT NULL DEFAULT FALSE')
 
 class Provider:
     def request(self,method,path,body=None,key=None):
@@ -83,7 +86,7 @@ def payload(order,email,method=None):
         body['receipt']={'customer':{'email':email},'items':[{'description':body['description'],'quantity':'1.00','amount':body['amount'],'vat_code':int(vat),'payment_subject':subject,'payment_mode':'full_payment'}]}
     return body
 
-def create_order(uid,plan,key,email,renew=False):
+def create_order(uid,plan,key,email,renew=False,via_link=False):
     plan=ALIASES.get(plan,plan)
     if plan not in PLANS: raise HTTPException(422,'Неизвестный тариф')
     with connect() as c:
@@ -105,7 +108,7 @@ def create_order(uid,plan,key,email,renew=False):
             body=payload(order,email,sub['method_id'] if renew else None)
             row=c.execute("INSERT INTO premium_orders(id,account_id,amount_rub,period_hours,status,plan_id,request_key,payload) VALUES(%s,%s,%s,%s,'pending',%s,%s,%s) RETURNING *",(order['id'],uid,order['amount_rub'],PLANS[plan][1]*24,plan,key,Jsonb(body))).fetchone()
             if not renew:
-                c.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version) VALUES(%s,%s,%s,'2026-11-02') ON CONFLICT(account_id) DO UPDATE SET plan_id=EXCLUDED.plan_id,email=EXCLUDED.email,auto_renew=TRUE,method_id=NULL,consent_version=EXCLUDED.consent_version",(uid,plan,email))
+                c.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,created_via_link) VALUES(%s,%s,%s,'2026-11-02',%s) ON CONFLICT(account_id) DO UPDATE SET plan_id=EXCLUDED.plan_id,email=EXCLUDED.email,auto_renew=TRUE,method_id=NULL,consent_version=EXCLUDED.consent_version,created_via_link=EXCLUDED.created_via_link",(uid,plan,email,via_link))
             return row
 
 def process(order_id,provider=None):

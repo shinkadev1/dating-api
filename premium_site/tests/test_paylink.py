@@ -98,13 +98,37 @@ class LinkLoginTests(unittest.TestCase):
 
     def test_same_account_keeps_session(self):
         account = uuid4()
-        with patch.object(identity, 'platform_account', return_value=account), \
+        with patch.object(identity, 'identity_account', return_value=account), \
+             patch.object(identity, 'platform_account') as found, \
              patch.object(identity, 'session', return_value={'account_id': account}), \
              patch.object(identity, 'new_session') as created:
             response = self.client.get('/', params={'utm_content': paylink.sign('tg', 9, SECRET)}, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertNotIn('set-cookie', response.headers)
         created.assert_not_called()
+        found.assert_not_called()
+
+    def test_other_signed_in_account_needs_csrf_confirmation(self):
+        current = {'account_id': uuid4(), 'email': 'a@example.test', 'via_link': False, 'csrf': 'good', 'premium_until': None}
+        token = paylink.sign('vk', 9, SECRET)
+        with patch.object(identity, 'identity_account', return_value=uuid4()), \
+             patch.object(identity, 'session', return_value=current), \
+             patch.object(identity, 'platform_account') as found, \
+             patch.object(identity, 'new_session') as created:
+            page = self.client.get('/', params={'utm_content': token}, follow_redirects=False)
+            self.assertEqual(page.status_code, 200)
+            self.assertIn('Войти по ссылке из чата ВКонтакте?', page.text)
+            self.assertIn('action="/auth/link"', page.text)
+            found.assert_not_called(); created.assert_not_called()
+            forged = self.client.post('/auth/link', data={'csrf': 'bad', 'token': token}, follow_redirects=False)
+            self.assertEqual(forged.status_code, 403)
+            found.assert_not_called()
+            account = uuid4(); found.return_value = account; created.return_value = ('switched', {})
+            ok = self.client.post('/auth/link', data={'csrf': 'good', 'token': token, 'plan': 'month'}, follow_redirects=False)
+        self.assertEqual(ok.status_code, 303)
+        self.assertEqual(ok.headers['location'], '/?plan=month')
+        self.assertIn(identity.COOKIE + '=switched', ok.headers['set-cookie'])
+        created.assert_called_once_with(account, via_link=True)
 
     def test_invalid_link_falls_back_without_account(self):
         with patch.object(identity, 'platform_account') as found:
@@ -120,6 +144,33 @@ class LinkLoginTests(unittest.TestCase):
             response = self.client.post('/account/link-codes', data={'csrf': 'c', 'platform': 'tg'})
         self.assertEqual(response.status_code, 403)
         code.assert_not_called()
+
+    def test_link_session_cannot_cancel_email_subscription(self):
+        from app.main import can_cancel
+        link = {'via_link': True}; email = {'via_link': False}
+        self.assertFalse(can_cancel(link, {'created_via_link': False}))
+        self.assertTrue(can_cancel(link, {'created_via_link': True}))
+        self.assertTrue(can_cancel(email, {'created_via_link': False}))
+        self.assertFalse(can_cancel(email, None))
+
+
+class WebhookAllowlistTests(unittest.TestCase):
+    def test_off_when_empty_and_cidr_match(self):
+        from app.main import webhook_allowed
+        with patch.dict(os.environ, {'YOOKASSA_WEBHOOK_IPS': ''}):
+            self.assertTrue(webhook_allowed('203.0.113.9'))
+        with patch.dict(os.environ, {'YOOKASSA_WEBHOOK_IPS': '198.51.100.0/27, 2001:db8::/32'}):
+            self.assertTrue(webhook_allowed('198.51.100.7'))
+            self.assertTrue(webhook_allowed('2001:db8::1'))
+            self.assertFalse(webhook_allowed('198.51.100.40'))
+            self.assertFalse(webhook_allowed('testclient'))
+
+    def test_rejected_before_provider_call(self):
+        with patch.dict(os.environ, {'YOOKASSA_WEBHOOK_IPS': '198.51.100.0/27'}), patch.object(billing, 'webhook') as handler:
+            with TestClient(app) as client:
+                response = client.post('/webhooks/yookassa', json={'type': 'notification', 'event': 'payment.succeeded', 'object': {'id': str(uuid4())}})
+        self.assertEqual(response.status_code, 403)
+        handler.assert_not_called()
 
 
 if __name__ == '__main__': unittest.main()
