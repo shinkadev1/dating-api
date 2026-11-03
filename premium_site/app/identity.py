@@ -9,7 +9,8 @@ from uuid import uuid4
 
 import httpx
 from fastapi import HTTPException
-from app.billing import connect
+from app import paylink
+from app.billing import connect, has_bot_users, sync_bot_users
 
 COOKIE = 'premium_session'
 
@@ -22,19 +23,53 @@ def schema():
         c.execute('CREATE TABLE IF NOT EXISTS premium_email_codes(session_digest TEXT PRIMARY KEY,email TEXT NOT NULL,code_hash TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,expires_at TIMESTAMPTZ NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS premium_auth_limits(key TEXT PRIMARY KEY,count INTEGER NOT NULL,expires_at TIMESTAMPTZ NOT NULL)')
         c.execute("CREATE TABLE IF NOT EXISTS premium_identities(platform TEXT NOT NULL CHECK(platform IN ('vk','tg','web')),user_id BIGINT NOT NULL CHECK(user_id>0),account_id UUID NOT NULL REFERENCES premium_accounts(id),PRIMARY KEY(platform,user_id))")
+        # Sessions opened by a signed chat link may pay, but may not link other profiles.
+        c.execute('ALTER TABLE premium_sessions ADD COLUMN IF NOT EXISTS via_link BOOLEAN NOT NULL DEFAULT FALSE')
         c.execute("CREATE TABLE IF NOT EXISTS premium_link_codes(digest TEXT PRIMARY KEY,platform TEXT NOT NULL,account_id UUID NOT NULL REFERENCES premium_accounts(id),expires_at TIMESTAMPTZ NOT NULL,used_at TIMESTAMPTZ)")
 
 def session(request):
     token=request.cookies.get(COOKIE,'')
     if not token: return None
     with connect() as c:
-        return c.execute('SELECT s.*,a.email,a.premium_until,a.trial_used FROM premium_sessions s LEFT JOIN premium_accounts a ON a.id=s.account_id WHERE s.digest=%s AND s.expires_at>NOW()',(digest(token),)).fetchone()
+        return c.execute('SELECT s.*,a.email,a.premium_until,a.trial_used,COALESCE(a.premium_until>NOW(),FALSE) premium_active FROM premium_sessions s LEFT JOIN premium_accounts a ON a.id=s.account_id WHERE s.digest=%s AND s.expires_at>NOW()',(digest(token),)).fetchone()
 
-def new_session(account=None):
+def new_session(account=None,via_link=False):
     token=secrets.token_urlsafe(32)
     with connect() as c:
-        row=c.execute("INSERT INTO premium_sessions(digest,account_id,csrf,expires_at) VALUES(%s,%s,%s,NOW()+INTERVAL '30 days') RETURNING *",(digest(token),account,secrets.token_urlsafe(32))).fetchone()
+        row=c.execute("INSERT INTO premium_sessions(digest,account_id,csrf,expires_at,via_link) VALUES(%s,%s,%s,NOW()+INTERVAL '30 days',%s) RETURNING *",(digest(token),account,secrets.token_urlsafe(32),via_link)).fetchone()
     return token,row
+
+def link_secret():
+    return os.getenv('PREMIUM_LINK_SECRET','')
+
+def verify_link_token(token):
+    """(platform,user_id) from a signed utm_content, or None: callers fall back to email login."""
+    secret=link_secret()
+    if len(secret)<32 or not token: return None
+    try: return paylink.verify(token,secret)
+    except paylink.InvalidLinkToken: return None
+
+def platform_account(platform,user_id):
+    """Find or create the per-platform premium account for a chat user and sync its access."""
+    with connect() as c:
+        with c.transaction():
+            c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(f'identity:{platform}:{user_id}',))
+            row=c.execute('SELECT account_id FROM premium_identities WHERE platform=%s AND user_id=%s',(platform,user_id)).fetchone()
+            if row: account=row['account_id']
+            else:
+                account=c.execute('INSERT INTO premium_accounts(id,email) VALUES(%s,NULL) RETURNING id',(uuid4(),)).fetchone()['id']
+                c.execute('INSERT INTO premium_identities(platform,user_id,account_id) VALUES(%s,%s,%s)',(platform,user_id,account))
+            sync_bot_users(c,account)
+    return account
+
+def link_login(request,token):
+    """Session token for a valid chat link, None when the current session already fits or the link is invalid."""
+    claimed=verify_link_token(token)
+    if not claimed: return None
+    account=platform_account(*claimed)
+    current=session(request)
+    if current and current['account_id']==account: return None
+    return new_session(account,via_link=True)[0]
 
 def cookie(response,token):
     response.set_cookie(COOKIE,token,httponly=True,secure=os.getenv('PAY_SECURE_COOKIE','true').lower()=='true',samesite='lax',max_age=2592000,path='/')
@@ -103,9 +138,12 @@ def service_auth(platform,authorization):
     if len(expected)<32 or not hmac.compare_digest(token,expected): raise HTTPException(403,'Доступ запрещён')
 
 def peer_status(platform,user_id):
+    """Same answer Chat API enforces: bot_users.premium_until (synced from the account) wins when longer."""
     with connect() as c:
-        row=c.execute('SELECT a.premium_until,COALESCE(a.premium_until>NOW(),FALSE) premium_active FROM premium_identities i JOIN premium_accounts a ON a.id=i.account_id WHERE i.platform=%s AND i.user_id=%s',(platform,user_id)).fetchone()
-    return {'linked':bool(row),'premium_until':row['premium_until'] if row else None,'premium_active':bool(row and row['premium_active'])}
+        bot="(SELECT premium_until FROM bot_users WHERE platform=k.platform AND user_id=k.user_id)" if has_bot_users(c) else 'NULL::timestamptz'
+        row=c.execute(f'SELECT i.account_id IS NOT NULL linked,GREATEST(a.premium_until,{bot}) premium_until FROM (SELECT %s::text platform,%s::bigint user_id) k LEFT JOIN premium_identities i ON i.platform=k.platform AND i.user_id=k.user_id LEFT JOIN premium_accounts a ON a.id=i.account_id',(platform,user_id)).fetchone()
+    until=row['premium_until']
+    return {'linked':row['linked'],'premium_until':until,'premium_active':bool(until and until>datetime.now(timezone.utc))}
 
 def link_code(account,platform):
     if platform not in ('vk','tg','web'): raise HTTPException(422,'Неизвестная платформа')
@@ -123,4 +161,5 @@ def claim(platform,user_id,code):
             if previous and previous['account_id']!=row['account_id']: raise HTTPException(409,'Профиль связан с другим аккаунтом')
             c.execute('INSERT INTO premium_identities(platform,user_id,account_id) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING',(platform,user_id,row['account_id']))
             c.execute('UPDATE premium_link_codes SET used_at=NOW() WHERE digest=%s',(digest(code),))
+            sync_bot_users(c,row['account_id'])
     return peer_status(platform,user_id)

@@ -110,6 +110,16 @@ class PostgresTests(unittest.TestCase):
         self.execute("UPDATE premium_accounts SET premium_until=NOW()-INTERVAL '1 hour'")
         with self.assertRaises(HTTPException):self.create()
 
+    def test_paid_order_syncs_bot_users_for_linked_identities(self):
+        self.execute("CREATE TABLE bot_users(platform TEXT NOT NULL,user_id BIGINT NOT NULL,premium_until TIMESTAMPTZ,updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(platform,user_id))")
+        self.execute("CREATE TABLE premium_identities(platform TEXT NOT NULL,user_id BIGINT NOT NULL,account_id UUID NOT NULL,PRIMARY KEY(platform,user_id))")
+        self.execute("INSERT INTO premium_identities VALUES('vk',1,%s),('tg',2,%s)",(self.account,self.account))
+        self.execute("INSERT INTO bot_users(platform,user_id,premium_until) VALUES('tg',2,NOW()+INTERVAL '100 days')")
+        order=self.create();billing.process(order['id'],self.provider)
+        until=self.row('SELECT premium_until FROM premium_accounts')['premium_until']
+        self.assertEqual(self.row("SELECT premium_until FROM bot_users WHERE platform='vk'")['premium_until'],until)
+        self.assertGreater(self.row("SELECT premium_until FROM bot_users WHERE platform='tg'")['premium_until'],until)
+
     def test_cancel_and_concurrent_renewal(self):
         order=self.create();billing.process(order['id'],self.provider)
         self.execute("UPDATE premium_accounts SET premium_until=NOW()-INTERVAL '1 hour'")

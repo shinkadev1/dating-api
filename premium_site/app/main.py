@@ -1,6 +1,7 @@
 """Existing FastAPI/Jinja pay site, verified email and YooKassa subscription UI."""
 import os
 from pathlib import Path
+from urllib.parse import urlencode
 from uuid import UUID, uuid4
 from fastapi import FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -42,9 +43,16 @@ def owner(request):
 def health(): return {'status':'ok'}
 
 @app.get('/')
-def offer(request:Request,plan:str=''):
+def offer(request:Request,plan:str='',utm_content:str=''):
     selected=billing.ALIASES.get(plan,plan)
     if selected and selected not in billing.PLANS: raise HTTPException(422,'Неизвестный тариф')
+    if utm_content:
+        # A signed link from a chat bot signs the user in for this platform account; the redirect
+        # drops the token from the address bar and history. Invalid links fall back to email login.
+        token=identity.link_login(request,utm_content)
+        target='/'+('?'+urlencode({'plan':plan}) if plan else '')
+        response=RedirectResponse(target,303)
+        return identity.cookie(response,token) if token else response
     return page(request,'index.html',{'plans':billing.PLANS,'selected':selected,'request_key':str(uuid4())})
 
 @app.post('/auth/request')
@@ -77,6 +85,7 @@ def account(request:Request):
 @app.post('/account/link-codes')
 def link_code(request:Request,csrf:str=Form(),platform:str=Form()):
     current=identity.csrf(request,csrf,True)
+    if current['via_link'] or not current['email']: raise HTTPException(403,'Войдите по email, чтобы привязать другие профили')
     code=identity.link_code(current['account_id'],platform)
     return page(request,'code.html',{'code':code,'platform':platform})
 

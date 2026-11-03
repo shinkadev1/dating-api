@@ -1,4 +1,5 @@
 """Postgres-backed YooKassa orders. All methods are synchronous for FastAPI def handlers."""
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -12,6 +13,25 @@ from fastapi import HTTPException
 PLANS = {'trial': ('Пробный', 3, 1), 'week': ('Неделя', 7, 299), 'month': ('Месяц', 30, 999), 'year': ('Год', 365, 2999)}
 ALIASES = {'start':'week','optimal':'month'}
 
+BOT_USERS_SYNC = """INSERT INTO bot_users(platform,user_id,premium_until)
+SELECT i.platform,i.user_id,a.premium_until FROM premium_identities i JOIN premium_accounts a ON a.id=i.account_id
+WHERE a.premium_until IS NOT NULL AND {where}
+ON CONFLICT(platform,user_id) DO UPDATE SET premium_until=GREATEST(bot_users.premium_until,EXCLUDED.premium_until),updated_at=NOW()
+WHERE bot_users.premium_until IS DISTINCT FROM GREATEST(bot_users.premium_until,EXCLUDED.premium_until)"""
+
+def has_bot_users(c):
+    return c.execute("SELECT to_regclass('bot_users') IS NOT NULL AS ok").fetchone()['ok']
+
+def sync_bot_users(c,account_id=None):
+    """Chat API grants media access from bot_users.premium_until: copy the paid term to every linked
+    (platform,user_id), creating missing rows. GREATEST keeps a longer manual grant. Runs inside the
+    caller's transaction so payment and access commit together."""
+    if not has_bot_users(c):
+        logging.warning('bot_users table missing; premium access not synced (run Chat API schema first)')
+        return 0
+    if account_id is None: return c.execute(BOT_USERS_SYNC.format(where='a.premium_until>NOW()')).rowcount
+    return c.execute(BOT_USERS_SYNC.format(where='a.id=%s'),(account_id,)).rowcount
+
 def connect():
     dsn=os.getenv('DATABASE_URL','')
     if not dsn: raise HTTPException(503,'База оплаты не настроена')
@@ -22,6 +42,8 @@ def schema():
         with c.transaction():
             c.execute('SELECT pg_advisory_xact_lock(8917123)')
             c.execute("CREATE TABLE IF NOT EXISTS premium_accounts(id UUID PRIMARY KEY,email TEXT UNIQUE NOT NULL,premium_until TIMESTAMPTZ,trial_used BOOLEAN NOT NULL DEFAULT FALSE)")
+            # Accounts created from a signed chat link have no email until email linking exists.
+            c.execute('ALTER TABLE premium_accounts ALTER COLUMN email DROP NOT NULL')
             c.execute("CREATE TABLE IF NOT EXISTS premium_orders(id UUID PRIMARY KEY,vk_user_id BIGINT,amount_rub INTEGER NOT NULL,period_hours INTEGER NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending','paid','failed')),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
             for name,kind in [('account_id','UUID'),('plan_id','TEXT'),('request_key','UUID'),('payment_id','TEXT'),('payload','JSONB'),('applied_at','TIMESTAMPTZ'),('provider_status',"TEXT NOT NULL DEFAULT 'pending'"),('confirmation_url','TEXT')]:
                 c.execute(f'ALTER TABLE premium_orders ADD COLUMN IF NOT EXISTS {name} {kind}')
@@ -57,6 +79,7 @@ def payload(order,email,method=None):
     if mode=='receipt':
         vat=os.getenv('YOOKASSA_VAT_CODE',''); subject=os.getenv('YOOKASSA_PAYMENT_SUBJECT','')
         if not vat.isdigit() or not subject: raise HTTPException(503,'Не настроены параметры чеков')
+        if not email: raise HTTPException(409,'Для чека нужен email: войдите по email на странице оплаты')
         body['receipt']={'customer':{'email':email},'items':[{'description':body['description'],'quantity':'1.00','amount':body['amount'],'vat_code':int(vat),'payment_subject':subject,'payment_mode':'full_payment'}]}
     return body
 
@@ -113,6 +136,7 @@ def process(order_id,provider=None):
                     method=payment.get('payment_method',{}); saved=method.get('saved') is True and bool(method.get('id'))
                     c.execute("UPDATE premium_subscriptions SET period_end=%s,plan_id=%s,trial_used=trial_used OR %s,method_id=%s,auto_renew=auto_renew AND %s WHERE account_id=%s",(until,'week' if row['plan_id']=='trial' else row['plan_id'],row['plan_id']=='trial',method.get('id') if saved else None,saved,uid))
                     c.execute("UPDATE premium_orders SET status='paid',applied_at=NOW() WHERE id=%s",(order_id,))
+                    sync_bot_users(c,uid)
                 elif status=='canceled':
                     c.execute("UPDATE premium_orders SET status='failed' WHERE id=%s",(order_id,))
                     c.execute('UPDATE premium_subscriptions SET auto_renew=FALSE WHERE account_id=%s',(uid,))
@@ -127,6 +151,7 @@ def tick():
         try: process(row['id'])
         except HTTPException: pass
     with connect() as c:
+        with c.transaction(): sync_bot_users(c)  # Repairs access if a sync was ever missed.
         due=c.execute('SELECT * FROM premium_subscriptions WHERE auto_renew AND method_id IS NOT NULL AND period_end<=NOW()').fetchall()
     for sub in due:
         try:
