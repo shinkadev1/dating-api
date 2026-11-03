@@ -84,13 +84,33 @@ class LinkLoginTests(unittest.TestCase):
     def tearDown(self):
         self.client.close(); self.env.stop()
 
-    def test_valid_link_sets_session_and_strips_token(self):
-        account = uuid4()
-        with patch.object(identity, 'platform_account', return_value=account) as found, \
-             patch.object(identity, 'consume_link_nonce', return_value=True), \
+    def test_get_never_consumes_or_creates_and_shows_continue(self):
+        anonymous = {'account_id': None, 'email': None, 'via_link': False, 'csrf': 'c'}
+        with patch.object(identity, 'consume_link_nonce') as consumed, \
+             patch.object(identity, 'platform_account') as found, \
              patch.object(identity, 'session', return_value=None), \
+             patch.object(identity, 'new_session', return_value=('anon-token', anonymous)) as created:
+            # A link preview crawler fetches the URL first.
+            response = self.client.get('/', params={'utm_source': 'vk', 'utm_campaign': 'premium', 'utm_content': paylink.sign('vk', 208891943, SECRET), 'plan': 'week'}, follow_redirects=False)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('Премиум для профиля VK ••••1943', response.text)
+        self.assertIn('action="/auth/link"', response.text)
+        self.assertIn('<button>Продолжить</button>', response.text)
+        self.assertIn('name="plan" value="week"', response.text)
+        self.assertIn("history.replaceState(null,'','/')", response.text)
+        self.assertNotIn('208891943', response.text)
+        consumed.assert_not_called(); found.assert_not_called()
+        created.assert_called_once_with()  # only the anonymous session for the CSRF form
+
+    def test_post_signs_in_once(self):
+        anonymous = {'account_id': None, 'email': None, 'via_link': False, 'csrf': 'c', 'digest': 'd'}
+        token = paylink.sign('vk', 9, SECRET)
+        account = uuid4()
+        with patch.object(identity, 'session', return_value=anonymous), \
+             patch.object(identity, 'consume_link_nonce', return_value=True), \
+             patch.object(identity, 'platform_account', return_value=account) as found, \
              patch.object(identity, 'new_session', return_value=('session-token', {})) as created:
-            response = self.client.get('/', params={'utm_source': 'vk', 'utm_campaign': 'premium', 'utm_content': paylink.sign('vk', 9, SECRET), 'plan': 'week'}, follow_redirects=False)
+            response = self.client.post('/auth/link', data={'csrf': 'c', 'token': token, 'plan': 'week'}, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers['location'], '/?plan=week')
         self.assertIn(identity.COOKIE + '=session-token', response.headers['set-cookie'])
@@ -98,16 +118,15 @@ class LinkLoginTests(unittest.TestCase):
         created.assert_called_once_with(account, via_link=True, profile=('vk', 9))
 
     def test_reused_link_is_rejected_with_hint(self):
+        anonymous = {'account_id': None, 'email': None, 'via_link': False, 'csrf': 'c'}
         with patch.object(identity, 'consume_link_nonce', return_value=False), \
-             patch.object(identity, 'session', return_value=None), \
+             patch.object(identity, 'session', return_value=anonymous), \
              patch.object(identity, 'platform_account') as found, \
              patch.object(identity, 'new_session') as created:
-            response = self.client.get('/', params={'utm_content': paylink.sign('vk', 9, SECRET)}, follow_redirects=False)
-        self.assertEqual(response.status_code, 303)
-        self.assertEqual(response.headers['location'], '/?link=used')
-        found.assert_not_called(); created.assert_not_called()
-        anonymous = {'account_id': None, 'email': None, 'via_link': False, 'csrf': 'c'}
-        with patch.object(identity, 'session', return_value=anonymous):
+            response = self.client.post('/auth/link', data={'csrf': 'c', 'token': paylink.sign('vk', 9, SECRET)}, follow_redirects=False)
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers['location'], '/?link=used')
+            found.assert_not_called(); created.assert_not_called()
             self.assertIn('Ссылка уже использована, запросите новую в чате', self.client.get('/?link=used').text)
 
     def test_link_session_shows_masked_profile(self):
@@ -138,32 +157,30 @@ class LinkLoginTests(unittest.TestCase):
 
     def test_same_account_keeps_session(self):
         account = uuid4()
+        current = {'account_id': account, 'email': None, 'via_link': True, 'csrf': 'c'}
         with patch.object(identity, 'identity_account', return_value=account), \
-             patch.object(identity, 'platform_account') as found, \
-             patch.object(identity, 'session', return_value={'account_id': account}), \
+             patch.object(identity, 'consume_link_nonce') as consumed, \
+             patch.object(identity, 'session', return_value=current), \
              patch.object(identity, 'new_session') as created:
-            response = self.client.get('/', params={'utm_content': paylink.sign('tg', 9, SECRET)}, follow_redirects=False)
+            response = self.client.post('/auth/link', data={'csrf': 'c', 'token': paylink.sign('tg', 9, SECRET)}, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.assertNotIn('set-cookie', response.headers)
-        created.assert_not_called()
-        found.assert_not_called()
+        created.assert_not_called(); consumed.assert_not_called()
 
-    def test_other_signed_in_account_needs_csrf_confirmation(self):
+    def test_other_signed_in_account_warned_and_csrf_checked(self):
         current = {'account_id': uuid4(), 'email': 'a@example.test', 'via_link': False, 'csrf': 'good', 'premium_until': None}
         token = paylink.sign('vk', 9, SECRET)
         with patch.object(identity, 'identity_account', return_value=uuid4()), \
              patch.object(identity, 'session', return_value=current), \
              patch.object(identity, 'platform_account') as found, \
-             patch.object(identity, 'consume_link_nonce', return_value=True), \
+             patch.object(identity, 'consume_link_nonce', return_value=True) as consumed, \
              patch.object(identity, 'new_session') as created:
             page = self.client.get('/', params={'utm_content': token}, follow_redirects=False)
             self.assertEqual(page.status_code, 200)
-            self.assertIn('Войти по ссылке из чата ВКонтакте?', page.text)
-            self.assertIn('action="/auth/link"', page.text)
-            found.assert_not_called(); created.assert_not_called()
+            self.assertIn('Вы выйдете из текущего аккаунта', page.text)
             forged = self.client.post('/auth/link', data={'csrf': 'bad', 'token': token}, follow_redirects=False)
             self.assertEqual(forged.status_code, 403)
-            found.assert_not_called()
+            found.assert_not_called(); consumed.assert_not_called(); created.assert_not_called()
             account = uuid4(); found.return_value = account; created.return_value = ('switched', {})
             ok = self.client.post('/auth/link', data={'csrf': 'good', 'token': token, 'plan': 'month'}, follow_redirects=False)
         self.assertEqual(ok.status_code, 303)

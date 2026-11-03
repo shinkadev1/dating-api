@@ -128,12 +128,15 @@ class AuthTests(unittest.TestCase):
         account,_=self.link_session('vk',51)
         with billing.connect() as c:
             c.execute("UPDATE premium_accounts SET premium_until=NOW()+INTERVAL '5 days' WHERE id=%s",(account,))
+            c.execute("UPDATE premium_accounts SET premium_until=NOW()+INTERVAL '3 days' WHERE id=%s",(email,))
             c.execute("INSERT INTO premium_orders(id,account_id,amount_rub,period_hours,status) VALUES(%s,%s,1,72,'paid')",(uuid4(),account))
             c.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,method_id,period_end) VALUES(%s,'week',NULL,'2026-11-02','card',NOW()+INTERVAL '5 days')",(account,))
         self.assertTrue(identity.claim('vk',51,identity.link_code(email,'vk'))['premium_active'])
         with billing.connect() as c:
             sub=c.execute('SELECT * FROM premium_subscriptions WHERE account_id=%s',(email,)).fetchone()
             self.assertIsNone(sub['method_id']);self.assertFalse(sub['auto_renew']);self.assertEqual(sub['email'],'one@example.test')
+            days=c.execute('SELECT EXTRACT(EPOCH FROM premium_until-NOW())/86400 d FROM premium_accounts WHERE id=%s',(email,)).fetchone()['d']
+            self.assertTrue(7.99<float(days)<=8.0)  # remaining terms are summed, not GREATEST
             self.assertIsNone(c.execute('SELECT 1 FROM premium_accounts WHERE id=%s',(account,)).fetchone())
     def test_claim_waits_for_pending_but_not_manual_review(self):
         email=self.account('two@example.test')
@@ -142,5 +145,11 @@ class AuthTests(unittest.TestCase):
         with self.assertRaises(HTTPException):identity.claim('vk',52,identity.link_code(email,'vk'))
         with billing.connect() as c:c.execute("UPDATE premium_orders SET provider_status='manual_review'")
         self.assertTrue(identity.claim('vk',52,identity.link_code(email,'vk'))['linked'])
+    def test_manual_review_order_does_not_block_checkout(self):
+        account,_=self.link_session('vk',60)
+        with billing.connect() as c:c.execute("INSERT INTO premium_orders(id,account_id,amount_rub,period_hours,status,provider_status) VALUES(%s,%s,1,72,'pending','manual_review')",(uuid4(),account))
+        with patch.dict(os.environ,{'YOOKASSA_RECEIPT_MODE':'exempt'}):
+            self.assertEqual(billing.create_order(account,'week',uuid4(),None,via_link=True)['status'],'pending')
+            with self.assertRaises(HTTPException):billing.create_order(account,'week',uuid4(),None,via_link=True)
 
 if __name__=='__main__':unittest.main()

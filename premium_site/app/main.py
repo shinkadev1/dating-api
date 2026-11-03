@@ -48,18 +48,14 @@ def offer(request:Request,plan:str='',utm_content:str='',link:str=''):
     selected=billing.ALIASES.get(plan,plan)
     if selected and selected not in billing.PLANS: raise HTTPException(422,'Неизвестный тариф')
     if utm_content:
-        # A signed link from a chat bot signs the user in for this platform account; the redirect
-        # drops the token from the address bar and history. Invalid links fall back to email login.
-        # Another signed-in account is switched only after a CSRF-protected confirmation.
-        result,value=identity.link_login(request,utm_content)
-        if result=='confirm':
-            return page(request,'confirm.html',{'platform':PLATFORM_NAMES.get(value,value),'token':utm_content,'plan':plan})
-        if result==identity.LINK_USED: return RedirectResponse('/?link=used',303)
-        return link_redirect(plan,value)
+        # GET only shows a "Продолжить" page: link previews (Telegram/VK crawlers) fetch this URL, so
+        # nothing is consumed or created here except the anonymous session the CSRF form needs.
+        # Sign-in happens on POST /auth/link. Invalid links fall back to email login.
+        claimed=identity.verify_link_token(utm_content)
+        if not claimed: return RedirectResponse('/',303)
+        return page(request,'confirm.html',{'link_profile':identity.profile_text(*claimed),'token':utm_content,'plan':selected or ''})
     hint='Ссылка уже использована, запросите новую в чате' if link=='used' else None
     return page(request,'index.html',{'plans':billing.PLANS,'selected':selected,'request_key':str(uuid4()),'hint':hint})
-
-PLATFORM_NAMES={'vk':'ВКонтакте','tg':'Telegram','web':'на сайте'}
 
 def link_redirect(plan,token):
     response=RedirectResponse('/'+('?'+urlencode({'plan':plan}) if plan else ''),303)
@@ -68,7 +64,7 @@ def link_redirect(plan,token):
 @app.post('/auth/link')
 def confirm_link(request:Request,csrf:str=Form(),token:str=Form(max_length=256),plan:str=Form(default='')):
     identity.csrf(request,csrf)
-    result,value=identity.link_login(request,token,confirmed=True)
+    result,value=identity.link_login(request,token)
     if result=='invalid': raise HTTPException(409,'Ссылка из чата недействительна или устарела; запросите новую у бота')
     if result==identity.LINK_USED: return RedirectResponse('/?link=used',303)
     return link_redirect(billing.ALIASES.get(plan,plan) if billing.ALIASES.get(plan,plan) in billing.PLANS else '',value)

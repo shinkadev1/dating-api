@@ -10,7 +10,7 @@ from uuid import uuid4
 import httpx
 from fastapi import HTTPException
 from app import paylink
-from app.billing import connect, has_bot_users, sync_bot_users
+from app.billing import UNFINISHED, connect, has_bot_users, sync_bot_users
 
 COOKIE = 'premium_session'
 LOCK = 8917123  # Same schema lock as billing.schema().
@@ -51,10 +51,13 @@ def new_session(account=None,via_link=False,profile=None):
         row=c.execute("INSERT INTO premium_sessions(digest,account_id,csrf,expires_at,via_link,link_platform,link_user_id) VALUES(%s,%s,%s,NOW()+INTERVAL '30 days',%s,%s,%s) RETURNING *",(digest(token),account,secrets.token_urlsafe(32),via_link,platform,user_id)).fetchone()
     return token,row
 
+def profile_text(platform,user_id):
+    """'VK ••••1943': whom the premium is for, without the full id."""
+    return f"{PLATFORM_NAMES.get(platform,platform)} ••••{str(user_id)[-4:]}"
+
 def profile_label(owner):
-    """'VK ••••1943' for a chat-link session: shows whom the premium is for without the full id."""
     if not owner or not owner.get('via_link') or not owner.get('link_platform'): return None
-    return f"{PLATFORM_NAMES.get(owner['link_platform'],owner['link_platform'])} ••••{str(owner['link_user_id'])[-4:]}"
+    return profile_text(owner['link_platform'],owner['link_user_id'])
 
 def link_secret():
     return os.getenv('PREMIUM_LINK_SECRET','')
@@ -89,19 +92,16 @@ def identity_account(platform,user_id):
         row=c.execute('SELECT account_id FROM premium_identities WHERE platform=%s AND user_id=%s',(platform,user_id)).fetchone()
     return row['account_id'] if row else None
 
-def link_login(request,token,confirmed=False):
-    """('ok', session token or None) | ('confirm', platform) | ('invalid', None) | ('used', None).
+def link_login(request,token):
+    """('ok', session token or None) | ('invalid', None) | ('used', None).
 
-    Without a signed-in session the link signs in right away (shared links get no special handling).
-    A session of a different account is never switched by a plain GET: that would allow login CSRF,
-    so the caller asks for a CSRF-protected confirmation first (confirmed=True). A token signs in
-    once; reuse is reported as 'used'."""
+    Called only from the CSRF-protected POST /auth/link, never on GET: link previews (Telegram/VK
+    crawlers) fetch the URL and must neither burn the single-use token nor create accounts. A token
+    signs in once; reuse is reported as 'used'. The same account already signed in keeps its session."""
     claimed=verify_link_token(token)
     if not claimed: return 'invalid',None
     current=session(request)
-    if current and current['account_id'] and not confirmed:
-        if identity_account(*claimed)==current['account_id']: return 'ok',None
-        return 'confirm',claimed[0]
+    if current and current['account_id'] and identity_account(*claimed)==current['account_id']: return 'ok',None
     if not consume_link_nonce(token): return LINK_USED,None
     account=platform_account(*claimed)
     return 'ok',new_session(account,via_link=True,profile=claimed)[0]
@@ -111,14 +111,11 @@ def lock_accounts(c,*accounts):
     for account in sorted({str(a) for a in accounts if a}):
         c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(account,))
 
-# A pending order parked for manual review without a provider payment can no longer complete by itself.
-UNFINISHED = "o.status='pending' AND NOT (o.provider_status='manual_review' AND o.payment_id IS NULL)"
-
 def merge_link_account(c,source,target):
     """Move an email-less chat-link account into an email account inside the caller's transaction.
 
     Only claim() calls this: the link code is issued by the email account and redeemed by the bot for
-    the profile, which proves both sides. Paid term is merged with GREATEST; orders and identities move;
+    the profile, which proves both sides. Remaining paid time is added to the target; orders and identities move;
     the subscription with the later period survives, but a moved one loses its saved card and
     auto-renew (the card owner never agreed to pay for the other account). Refused while the source
     has an unfinished payment (process() keys on its id)."""
@@ -126,7 +123,8 @@ def merge_link_account(c,source,target):
     if c.execute(f'SELECT 1 FROM premium_orders o WHERE o.account_id=%s AND {UNFINISHED}',(source,)).fetchone():
         raise HTTPException(409,'Дождитесь завершения платежа и повторите привязку')
     src=c.execute('SELECT * FROM premium_accounts WHERE id=%s FOR UPDATE',(source,)).fetchone()
-    c.execute('UPDATE premium_accounts SET premium_until=GREATEST(premium_until,%s),trial_used=trial_used OR %s WHERE id=%s',(src['premium_until'],src['trial_used'],target))
+    # Both terms were paid for: the source's remaining time is added on top of the target's term.
+    c.execute("UPDATE premium_accounts SET premium_until=CASE WHEN %(src)s::timestamptz>NOW() THEN GREATEST(COALESCE(premium_until,NOW()),NOW())+(%(src)s::timestamptz-NOW()) ELSE premium_until END,trial_used=trial_used OR %(trial)s WHERE id=%(target)s",{'src':src['premium_until'],'trial':src['trial_used'],'target':target})
     subs={row['account_id']:row for row in c.execute('SELECT * FROM premium_subscriptions WHERE account_id IN (%s,%s) FOR UPDATE',(source,target)).fetchall()}
     if source in subs:
         floor=datetime.min.replace(tzinfo=timezone.utc)

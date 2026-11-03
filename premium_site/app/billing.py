@@ -19,6 +19,9 @@ WHERE a.premium_until IS NOT NULL AND {where}
 ON CONFLICT(platform,user_id) DO UPDATE SET premium_until=GREATEST(bot_users.premium_until,EXCLUDED.premium_until),updated_at=NOW()
 WHERE bot_users.premium_until IS DISTINCT FROM GREATEST(bot_users.premium_until,EXCLUDED.premium_until)"""
 
+# A pending order parked for manual review without a provider payment can no longer complete by itself.
+UNFINISHED = "o.status='pending' AND NOT (o.provider_status='manual_review' AND o.payment_id IS NULL)"
+
 def has_bot_users(c):
     return c.execute("SELECT to_regclass('bot_users') IS NOT NULL AS ok").fetchone()['ok']
 
@@ -100,7 +103,7 @@ def create_order(uid,plan,key,email,renew=False,via_link=False):
             if not owner: raise HTTPException(409,'Войдите в аккаунт оплаты')
             email=owner['email']
             sub=c.execute('SELECT * FROM premium_subscriptions WHERE account_id=%s',(uid,)).fetchone()
-            if c.execute("SELECT 1 FROM premium_orders WHERE account_id=%s AND status='pending'",(uid,)).fetchone(): raise HTTPException(409,'Уже есть незавершённый платёж')
+            if c.execute(f'SELECT 1 FROM premium_orders o WHERE o.account_id=%s AND {UNFINISHED}',(uid,)).fetchone(): raise HTTPException(409,'Уже есть незавершённый платёж')
             if not renew and owner['premium_until'] and owner['premium_until']>datetime.now(timezone.utc): raise HTTPException(409,'Подписка уже оплачена')
             if plan=='trial' and owner['trial_used']: raise HTTPException(409,'Пробный период уже использован')
             if renew and (not sub or not sub['auto_renew'] or not sub['method_id'] or sub['period_end']>datetime.now(timezone.utc)): return None
