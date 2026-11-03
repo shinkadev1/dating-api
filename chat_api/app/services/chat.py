@@ -197,8 +197,11 @@ class ChatService:
     async def media_block_reason(self, peer: Peer) -> str | None:
         """Почему медиа не уйдёт: нужен премиум у отправителя и у живого собеседника.
 
-        Собеседник из chat-engine премиума не требует. Если пары уже нет, решает forward_media.
+        Собеседник из chat-engine премиума не требует, а сам chat-engine (engine_bridge) шлёт медиа
+        без проверки. Если пары уже нет, решает forward_media.
         """
+        if peer.is_engine:
+            return None
         async with self._pool.connection() as conn:
             if not await repo.user_is_premium(conn, peer):
                 return MEDIA_NEEDS_PREMIUM

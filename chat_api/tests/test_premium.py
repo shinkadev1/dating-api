@@ -193,6 +193,10 @@ class GateTests(unittest.TestCase):
         self.assertIsNone(self.reason({self.me}, engine))
         self.assertIsNone(self.reason({self.me}, None))
 
+    def test_engine_sender_is_not_gated(self) -> None:
+        self.me = Peer("engine", "acc", 1)
+        self.assertIsNone(self.reason(set(), Peer("vk", "club1", 3)))
+
 
 if __name__ == "__main__":
     unittest.main()

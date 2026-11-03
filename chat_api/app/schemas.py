@@ -17,7 +17,7 @@ class StateOut(BaseModel):
 
 
 class PremiumLinkOut(BaseModel):
-    url: str = Field(description="Страница оплаты с подписанным utm_content; действует около 7 дней")
+    url: str = Field(description="Страница оплаты с подписанным utm_content; действует 24 часа")
     premium_active: bool = Field(description="Премиум действует сейчас")
     premium_until: datetime | None = Field(description="До какого момента оплачен премиум")
 
