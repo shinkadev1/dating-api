@@ -1,5 +1,9 @@
 # История важных изменений
 
+## 2026-11-03 — оплата премиума и запрет медиа без него (ветка `payments`)
+
+Перенесён premium_site (ЮKassa) из старого worktree ветки `premium` без монолита vk_bot/. Добавлены подписанная ссылка на оплату `GET .../premium/link`, вход на странице оплаты по `utm_content` без email, синхронизация `bot_users.premium_until` и 403 на медиа без премиума у любой из сторон. Причина: премиум = отправка фото/видео/аудио, покупка по аккаунту платформы. Новые переменные: `PREMIUM_LINK_SECRET`, `PAY_PUBLIC_URL` (chat-api) и переменные premium_site в `.env.example`. Тесты без Postgres прошли; тесты с базой и запуск compose не выполнялись (нет Docker/Postgres).
+
 ## 2026-10-31 — оркестрация и фиксация контекста
 
 Добавлены .codex/config.toml и explorer/planner/developer/reviewer/reporter, правила routing и workflow в AGENTS.md. Модель planner/reviewer — gpt-6-astra/high по подтверждённому выбору пользователя. Обновлены правила и память; контекст и конфигурация сохраняются отдельным локальным коммитом без прикладных изменений и push. Проверки: 42 TOML, строгая загрузка конфигураций в 7 корнях, diff check, reviewer PASS; mobile typecheck прошёл. Запуск всех ролей и ESLint не проверены (ESLint не настроен).
