@@ -63,6 +63,14 @@ class CheckoutTests(unittest.TestCase):
     def row(self, query, args=()):
         with billing.connect() as c: return c.execute(query, args).fetchone()
 
+    def test_referrer_policy_keeps_same_origin_form_posts_working(self):
+        # no-referrer makes Chrome send "Origin: null" on same-site form POSTs, which csrf() rejects.
+        response = self.client.get('/')
+        self.assertEqual(response.headers['Referrer-Policy'], 'same-origin')
+        self.login(); data = self.form()
+        self.assertEqual(self.client.post('/checkout', data=data, headers={'Origin': 'null'}, follow_redirects=False).status_code, 403)
+        self.assertEqual(self.client.post('/checkout', data=self.form(), headers={'Origin': 'http://testserver'}, follow_redirects=False).status_code, 303)
+
     def test_trial_card_has_two_consents_disabled_button_and_real_terms(self):
         self.login()
         html = self.client.get('/?plan=trial').text
@@ -161,6 +169,10 @@ class CheckoutTests(unittest.TestCase):
         self.assertNotIn('link-codes', html); self.assertNotIn('/link', html)
         with billing.connect() as c: c.execute('UPDATE premium_subscriptions SET method_id=NULL')
         self.assertIn('отвязана', self.client.get('/account').text)
+        self.assertIn('Отключить автопродление', self.client.get('/account').text)  # auto_renew still on
+        with billing.connect() as c: c.execute('UPDATE premium_subscriptions SET auto_renew=FALSE')
+        html = self.client.get('/account').text
+        self.assertNotIn('Отключить автопродление', html); self.assertIn('Списаний больше не будет', html)
 
 
 if __name__ == '__main__': unittest.main()

@@ -39,7 +39,9 @@ def prepare_database():
 async def private_pages(request,call_next):
     response=await call_next(request)
     response.headers['Cache-Control']='no-store'
-    response.headers['Referrer-Policy']='no-referrer'
+    # same-origin, not no-referrer: with no-referrer Chrome sends "Origin: null" on same-site form POSTs
+    # and identity.csrf() rejects every form. Cross-origin (ЮKassa, links out) still gets no referrer.
+    response.headers['Referrer-Policy']='same-origin'
     response.headers['X-Content-Type-Options']='nosniff'
     return response
 
