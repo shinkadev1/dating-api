@@ -81,3 +81,23 @@
 - **Выключить оплату:** поставьте `PAYMENTS_ENABLED=false` в ENV_FILE и перезапустите деплой (Actions → Deploy → Re-run). Деплой удалит контейнеры `vk-premium-web` и `vk-premium-scheduler` и уберёт из `.env` сервера `PREMIUM_LINK_SECRET`, `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY`, `PAY_AUTH_SECRET`, `RESEND_API_KEY`, `YOOKASSA_WEBHOOK_IPS` и `PREMIUM_FORWARDED_ALLOW_IPS`. После этого `/premium/link` в Chat API отвечает 503. Значения в ENV_FILE можно оставить: при `PAYMENTS_ENABLED=true` оплата включится снова. Запрет медиа при этом останется: он в коде Chat API.
 - **Вернуть медиа без премиума:** задеплойте предыдущий коммит `master` (revert merge-коммита ветки `payments` и push). Таблицы оплаты и `bot_users.premium_until` останутся в базе и при повторном включении продолжат работать.
 - Hostname `pay.chatwithyou.site` в туннеле можно оставить: без контейнера он отвечает 502.
+
+## 10. Локальный тест с тестовым магазином
+
+Нужны: Python 3.11+, PostgreSQL (локально или в контейнере) и ключи **тестового** магазина ЮKassa. Webhook и онлайн-касса не нужны. Значения ключей храните только в локальном `.env`/переменных окружения, не в репозитории.
+
+1. Окружение (из каталога `premium_site`):
+   - `python -m venv .venv`, активируйте и выполните `pip install -r requirements.txt`.
+2. База: создайте пустую БД Postgres и задайте `DATABASE_URL=postgresql://USER:PASSWORD@127.0.0.1:5432/DBNAME`. Таблицы оплаты создаются при старте. Таблицы Chat API (`bot_users`) необязательны: без них доступ не синхронизируется, в логе будет предупреждение.
+3. Переменные окружения (имена; значения подставьте сами):
+   - `PAY_PUBLIC_URL=http://127.0.0.1:8000`, `PAY_SECURE_COOKIE=false`;
+   - `PAY_AUTH_SECRET` и `PREMIUM_LINK_SECRET` — любые строки не короче 32 символов;
+   - `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` — ключи тестового магазина, `YOOKASSA_TEST_MODE=true`;
+   - `YOOKASSA_RECEIPT_MODE=exempt` — без онлайн-кассы (чек не отправляется). Для режима `receipt` нужны `YOOKASSA_VAT_CODE`, `YOOKASSA_PAYMENT_SUBJECT` и вход по email (`RESEND_API_KEY`, `AUTH_MAIL_FROM`).
+4. Запуск из `premium_site`: `uvicorn app.main:app --port 8000`. Проверка: `http://127.0.0.1:8000/health` → `{"status":"ok"}`.
+5. Вход по подписанной ссылке (почта не нужна). Сгенерируйте токен тем же `PREMIUM_LINK_SECRET`, из каталога `premium_site`:
+   `python -c "from app import paylink; import os; print(paylink.sign('vk', 12345, os.environ['PREMIUM_LINK_SECRET']))"`
+   Откройте `http://127.0.0.1:8000/?utm_content=<токен>` и нажмите «Продолжить» (ссылка одноразовая, действует 24 часа). Альтернатива: `GET /api/v1/peers/{platform}/{bot_key}/{user_id}/premium/link` у локального Chat API с тем же `PREMIUM_LINK_SECRET`.
+6. Выберите тариф → отметьте оба согласия → «Перейти к оплате →»: откроется страница ЮKassa. Оплатите тестовой картой (номера — в документации ЮKassa, раздел «Тестирование»).
+7. Webhook локально не придёт: после возврата на страницу заказа нажмите «Проверить оплату» — заказ перечитает платёж через API и начислит премиум. Планировщик автопродления локально не запускается; при необходимости `python -c "from app import billing; billing.tick()"`.
+8. Если ЮKassa отклонила создание платежа (неверные ключи, запрет настроек магазина), страница покажет сообщение, а заказ получит статус «отклонён» — можно сразу создать новый. Причина (код и описание ответа ЮKassa) пишется в лог сервера без ключей.

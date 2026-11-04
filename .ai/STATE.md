@@ -1,5 +1,9 @@
 # Состояние vk-bot
 
+## Ветка loop/payments-complete, 2026-11-04
+
+Worktree `.worktrees/vk-bot-payments-complete`, от `payments` 5c0e1c1. Изменены только `premium_site/` (billing, main, identity, шаблоны, payment.css, тесты), `.env.example`, `premium_site/DEPLOY.md`, `.ai/`. База тестов: 38 passed; после изменений pytest premium_site на Postgres (pgserver): 57 passed, 0 skipped. Схема БД не менялась. Тесты с реальным тестовым магазином ЮKassa не запускались (нет ключей); отказ/неопределённый исход проверены на подставном провайдере и на мок-ответах httpx.
+
 ## Оркестрация Codex, 2026-10-31
 
 Добавлены .codex/config.toml и пять ролей, AGENTS.md дополнен маршрутизацией и workflow. Luna/low — диспетчер и дешёвые роли; Sol/medium — developer; Astra (gpt-6-astra)/high — planner и reviewer (выбор подтверждён пользователем). 42 TOML-файла и 7 конфигураций прошли разбор и строгую проверку установленным CLI; независимый reviewer PASS. Существующие инструкции сохранены. Выполнен mobile typecheck; lint недоступен из-за исходно отсутствующей настройки ESLint. Реальный запуск ролей и смена модели текущего чата не тестировались.
