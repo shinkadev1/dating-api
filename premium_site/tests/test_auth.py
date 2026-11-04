@@ -130,7 +130,7 @@ class AuthTests(unittest.TestCase):
             c.execute("UPDATE premium_accounts SET premium_until=NOW()+INTERVAL '5 days' WHERE id=%s",(account,))
             c.execute("UPDATE premium_accounts SET premium_until=NOW()+INTERVAL '3 days' WHERE id=%s",(email,))
             c.execute("INSERT INTO premium_orders(id,account_id,amount_rub,period_hours,status) VALUES(%s,%s,1,72,'paid')",(uuid4(),account))
-            c.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,method_id,period_end) VALUES(%s,'week',NULL,'2026-11-02','card',NOW()+INTERVAL '5 days')",(account,))
+            c.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,method_id,period_end) VALUES(%s,'week',NULL,'2026-11-04','card',NOW()+INTERVAL '5 days')",(account,))
         self.assertTrue(identity.claim('vk',51,identity.link_code(email,'vk'))['premium_active'])
         with billing.connect() as c:
             sub=c.execute('SELECT * FROM premium_subscriptions WHERE account_id=%s',(email,)).fetchone()

@@ -15,7 +15,7 @@ from app.billing import UNFINISHED, connect, has_bot_users, sync_bot_users
 COOKIE = 'premium_session'
 LOCK = 8917123  # Same schema lock as billing.schema().
 PLATFORM_NAMES = {'vk':'VK','tg':'Telegram','web':'сайта'}
-EMAIL_TAKEN = 'Этот email уже привязан к другому аккаунту. Чтобы объединить, используйте команду /link в чате'
+EMAIL_TAKEN = 'Этот email уже привязан к другому аккаунту. Чтобы объединить аккаунты, напишите в поддержку support@chatwithyou.site'
 LINK_USED = 'used'
 
 def digest(value):

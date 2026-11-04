@@ -153,7 +153,7 @@ class LinkLoginTests(unittest.TestCase):
              patch.object(identity, 'verify_code', side_effect=identity.HTTPException(409, identity.EMAIL_TAKEN)):
             response = self.client.post('/auth/verify', data={'csrf': 'c', 'code': '123456'})
         self.assertEqual(response.status_code, 409)
-        self.assertIn('используйте команду /link в чате', response.text)
+        self.assertIn('напишите в поддержку support@chatwithyou.site', response.text)
 
     def test_same_account_keeps_session(self):
         account = uuid4()

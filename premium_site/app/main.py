@@ -1,6 +1,7 @@
 """Existing FastAPI/Jinja pay site, verified email and YooKassa subscription UI."""
 import ipaddress
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
@@ -15,6 +16,11 @@ APP_DIR=Path(__file__).resolve().parent
 app=FastAPI(title='Premium')
 app.mount('/static',StaticFiles(directory=APP_DIR/'static'),name='static')
 templates=Jinja2Templates(directory=APP_DIR/'templates')
+
+def format_time(value):
+    return value.astimezone(timezone.utc).strftime('%d.%m.%Y %H:%M UTC') if value else ''
+
+templates.env.filters['dt']=format_time
 
 @app.on_event('startup')
 def prepare_database():
@@ -32,8 +38,19 @@ def page(request,name,context=None,status=200):
     owner=identity.session(request)
     token=None
     if not owner: token,owner=identity.new_session()
-    response=templates.TemplateResponse(request,name,{'owner':owner,'csrf':owner['csrf'],'profile':identity.profile_label(owner),**(context or {})},status_code=status)
+    response=templates.TemplateResponse(request,name,{'owner':owner,'csrf':owner['csrf'],'profile':identity.profile_label(owner),'year':datetime.now(timezone.utc).year,**(context or {})},status_code=status)
     return identity.cookie(response,token) if token else response
+
+def notice(request,message,status,order_id=None):
+    """Human-readable error page that keeps the response code of the failure."""
+    return page(request,'notice.html',{'message':message,'order_id':order_id},status)
+
+def plan_cards():
+    cards=[]
+    for plan_id,(name,days,price) in billing.PLANS.items():
+        renewal_id,renewal_price,renewal_days=billing.renewal_terms(plan_id)
+        cards.append({'id':plan_id,'name':name,'days':days,'price':price,'renewal_price':renewal_price,'renewal_days':renewal_days,'trial':renewal_id!=plan_id})
+    return cards
 
 def owner(request):
     current=identity.session(request)
@@ -55,7 +72,9 @@ def offer(request:Request,plan:str='',utm_content:str='',link:str=''):
         if not claimed: return RedirectResponse('/',303)
         return page(request,'confirm.html',{'link_profile':identity.profile_text(*claimed),'token':utm_content,'plan':selected or ''})
     hint='Ссылка уже использована, запросите новую в чате' if link=='used' else None
-    return page(request,'index.html',{'plans':billing.PLANS,'selected':selected,'request_key':str(uuid4()),'hint':hint})
+    cards=plan_cards()
+    chosen=next((card for card in cards if card['id']==selected),None)
+    return page(request,'index.html',{'cards':cards,'chosen':chosen,'consent_version':billing.CONSENT_VERSION,'request_key':str(uuid4()),'hint':hint})
 
 def link_redirect(plan,token):
     response=RedirectResponse('/'+('?'+urlencode({'plan':plan}) if plan else ''),303)
@@ -103,7 +122,11 @@ def account(request:Request):
         subscription=c.execute('SELECT * FROM premium_subscriptions WHERE account_id=%s',(current['account_id'],)).fetchone()
         orders=c.execute('SELECT * FROM premium_orders WHERE account_id=%s ORDER BY created_at DESC LIMIT 20',(current['account_id'],)).fetchall()
         links=c.execute('SELECT platform,user_id FROM premium_identities WHERE account_id=%s',(current['account_id'],)).fetchall()
-    return page(request,'account.html',{'subscription':subscription,'orders':orders,'links':links,'can_cancel':can_cancel(current,subscription)})
+    renewal=None
+    if subscription:
+        renewal_id,price,days=billing.renewal_terms(subscription['plan_id'])
+        renewal={'name':billing.PLANS[renewal_id][0],'price':price,'days':days}
+    return page(request,'account.html',{'subscription':subscription,'orders':orders,'links':links,'can_cancel':can_cancel(current,subscription),'renewal':renewal})
 
 def can_cancel(current,subscription):
     """A chat-link session may not cancel a subscription that was started after email sign-in."""
@@ -125,12 +148,17 @@ def cancel(request:Request,csrf:str=Form()):
     return RedirectResponse('/account',303)
 
 @app.post('/checkout')
-def checkout(request:Request,csrf:str=Form(),plan:str=Form(),request_key:UUID=Form(),consent:str=Form(default='')):
+def checkout(request:Request,csrf:str=Form(),plan:str=Form(),request_key:UUID=Form(),consent_terms:str=Form(default=''),consent_recurring:str=Form(default='')):
     current=identity.csrf(request,csrf,True)
-    if consent!='2026-11-02': raise HTTPException(422,'Подтвердите условия автопродления')
-    order=billing.create_order(current['account_id'],plan,request_key,current['email'],via_link=current['via_link'])
-    try: billing.process(order['id'])
-    except HTTPException: pass  # The durable order remains accessible for reconciliation.
+    # The button state in the page is only a convenience: both consents are enforced here.
+    if consent_terms!='yes' or consent_recurring!=billing.CONSENT_VERSION:
+        return notice(request,'Отметьте оба согласия: с политикой, условиями и тарифами, а также с автопродлением. Без них оплата невозможна.',422)
+    try: order=billing.create_order(current['account_id'],plan,request_key,current['email'],via_link=current['via_link'],consent_version=consent_recurring)
+    except HTTPException as exc: return notice(request,str(exc.detail),exc.status_code)
+    try: order=billing.process(order['id']) or order
+    except billing.ProviderRejected as exc: return notice(request,str(exc.detail),exc.status_code)
+    except HTTPException as exc: return notice(request,str(exc.detail),exc.status_code,order['id'])  # The durable order stays available for reconciliation.
+    if order['status']=='pending' and order['confirmation_url']: return RedirectResponse(order['confirmation_url'],303)
     return RedirectResponse('/orders/'+str(order['id']),303)
 
 def get_order(request,order_id):
@@ -142,7 +170,7 @@ def get_order(request,order_id):
 @app.get('/orders/{order_id}')
 def order_page(request:Request,order_id:UUID):
     row=get_order(request,order_id)
-    return page(request,'order.html',{'order':row})
+    return page(request,'order.html',{'order':row,'short_id':str(row['id'])[:8]})
 
 @app.post('/orders/{order_id}/refresh')
 def refresh(request:Request,order_id:UUID,csrf:str=Form()):
@@ -150,7 +178,8 @@ def refresh(request:Request,order_id:UUID,csrf:str=Form()):
     error=None
     try: billing.process(order_id)
     except HTTPException as exc: error=str(exc.detail)
-    return page(request,'order.html',{'order':get_order(request,order_id),'error':error})
+    order=get_order(request,order_id)
+    return page(request,'order.html',{'order':order,'short_id':str(order['id'])[:8],'error':error})
 
 class Claim(BaseModel):
     code:str=Field(min_length=20,max_length=128)

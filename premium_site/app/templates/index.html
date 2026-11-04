@@ -1,1 +1,74 @@
-{% extends 'base.html' %}{% block content %}{% if hint %}<p role="alert">{{ hint }}</p>{% endif %}<p>Один аккаунт для сайта, VK и Telegram. Привяжите каналы в аккаунте.</p>{% if not owner.email %}<h2>Вход по email</h2>{% if owner.account_id %}<p>Укажите email: он нужен для чека и управления подпиской. Покупка останется у профиля {{ profile or "из чата" }}.</p>{% endif %}<form method="post" action="/auth/request"><input type="hidden" name="csrf" value="{{ csrf }}"><label>Email <input name="email" type="email" required autocomplete="email"></label><button>Получить код</button></form>{% endif %}{% if owner.account_id %}<p>Premium {% if owner.premium_until %}до {{ owner.premium_until }}{% else %}не оплачен{% endif %}.</p>{% for id, details in plans.items() %}{% if not selected or selected==id %}<section><h2>{{ details[0] }}: {{ details[2] }} ₽ за {{ details[1] }} дней</h2><p>{% if id=='trial' %}После 3 дней — 299 ₽ каждые 7 дней. Пробный период доступен один раз.{% else %}Затем {{ details[2] }} ₽ каждые {{ details[1] }} дней.{% endif %}</p><form method="post" action="/checkout"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="plan" value="{{ id }}"><input type="hidden" name="request_key" value="{{ request_key }}"><label><input type="checkbox" name="consent" value="2026-11-02" required> Согласен на сохранение способа оплаты и автопродление на указанных условиях. Отмена в аккаунте сохраняет оплаченный срок; уже начатый платёж может завершиться.</label><button>{% if profile %}Оплатить {{ details[2] }} ₽ для профиля {{ profile }}{% else %}Перейти к оплате {{ details[2] }} ₽{% endif %}</button></form></section>{% endif %}{% endfor %}{% endif %}{% endblock %}
+{% extends 'base.html' %}{% block title %}{% if chosen %}Заказ{% else %}Тариф Premium{% endif %}{% endblock %}
+{% block content %}
+{% if hint %}<p class="alert" role="alert">{{ hint }}</p>{% endif %}
+
+{% if not owner.account_id %}
+  <p class="muted">Один аккаунт для сайта, VK и Telegram.{% if chosen %} Чтобы оформить тариф «{{ chosen.name }}», войдите по email.{% endif %}</p>
+  <section class="panel">
+    <h2>Вход по email</h2>
+    <form method="post" action="/auth/request">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="field">Email <input name="email" type="email" required autocomplete="email"></label>
+      <button class="btn">Получить код</button>
+    </form>
+  </section>
+{% endif %}
+
+{% if not chosen %}
+  {% if owner.account_id %}<p class="muted">Premium {% if owner.premium_until %}до {{ owner.premium_until|dt }}{% else %}не оплачен{% endif %}.</p>{% endif %}
+  <div class="plans">
+  {% for card in cards %}
+    <section class="plan">
+      <h2>{{ card.name }}</h2>
+      <p class="plan-price">{{ card.price }} ₽ <span>за {{ card.days }} {{ 'дня' if card.days==3 else 'дней' }}</span></p>
+      <p class="muted small">{% if card.trial %}Пробный период доступен один раз. После {{ card.days }} дней — {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% else %}Затем {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% endif %}</p>
+      <a class="btn" href="/?plan={{ card.id }}">Выбрать</a>
+    </section>
+  {% endfor %}
+  </div>
+{% elif owner.account_id %}
+  <section class="order">
+    <div class="order-head"><span>Заказ</span><a href="/">Другой тариф</a></div>
+    <h2 class="order-title">{{ chosen.name }} — {{ chosen.days }} {{ 'дня' if chosen.days==3 else 'дней' }}</h2>
+    <div class="total"><span>К оплате</span><strong>{{ chosen.price }} ₽</strong></div>
+    <p class="muted">Премиум начисляется сразу после подтверждения оплаты.</p>
+
+    <form method="post" action="/checkout" id="checkout">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="plan" value="{{ chosen.id }}">
+      <input type="hidden" name="request_key" value="{{ request_key }}">
+      <label class="check"><input type="checkbox" name="consent_terms" value="yes" required>
+        <span>Я согласен с <a href="https://chatwithyou.site/policy/" target="_blank" rel="noopener">политикой конфиденциальности</a>, <a href="https://chatwithyou.site/terms/" target="_blank" rel="noopener">условиями пользования</a> и <a href="https://chatwithyou.site/#premium" target="_blank" rel="noopener">тарифами</a> сервиса.</span></label>
+      <label class="check"><input type="checkbox" name="consent_recurring" value="{{ consent_version }}" required>
+        <span>Я согласен на сохранение способа оплаты и автоматические списания: после {{ chosen.days }} дней — {{ chosen.renewal_price }} ₽ каждые {{ chosen.renewal_days }} дней автоматически до отключения. Отключить продление можно в аккаунте в любой момент, оплаченный срок сохраняется.</span></label>
+      <button class="btn big" id="pay" disabled>Перейти к оплате →</button>
+      <noscript><button class="btn big">Перейти к оплате →</button><style>#pay{display:none}</style></noscript>
+    </form>
+
+    <div class="trust">
+      <span class="tick" aria-hidden="true">✓</span>
+      <div><strong>Оплата через ЮKassa</strong><br>Данные карты вводятся на стороне ЮKassa, мы их не храним. Visa, Mastercard, МИР.</div>
+    </div>
+  </section>
+  <script>
+  (function(){
+    var form=document.getElementById('checkout'),pay=document.getElementById('pay');
+    var boxes=form.querySelectorAll('input[type=checkbox]');
+    function sync(){pay.disabled=!Array.prototype.every.call(boxes,function(b){return b.checked})}
+    Array.prototype.forEach.call(boxes,function(b){b.addEventListener('change',sync)});sync();
+  })();
+  </script>
+{% endif %}
+
+{% if owner.account_id and not owner.email %}
+  <section class="panel">
+    <h2>Email для чека и управления подпиской</h2>
+    <p class="muted small">Покупка останется у профиля {{ profile or "из чата" }}.</p>
+    <form method="post" action="/auth/request">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="field">Email <input name="email" type="email" required autocomplete="email"></label>
+      <button class="btn secondary">Получить код</button>
+    </form>
+  </section>
+{% endif %}
+{% endblock %}
