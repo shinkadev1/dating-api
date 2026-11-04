@@ -12,6 +12,16 @@ from fastapi import HTTPException
 
 PLANS = {'trial': ('Пробный', 3, 1), 'week': ('Неделя', 7, 299), 'month': ('Месяц', 30, 999), 'year': ('Год', 365, 2999)}
 ALIASES = {'start':'week','optimal':'month'}
+# Version of the consent text shown at checkout; stored with the subscription.
+CONSENT_VERSION = '2026-11-04'
+# Plan that is charged after the first period when it differs from the purchased one (trial -> week).
+RENEWAL = {'trial':'week'}
+
+def renewal_terms(plan):
+    """(plan_id, price in RUB, days) of the automatic charge that follows `plan`."""
+    plan=ALIASES.get(plan,plan)
+    renewal=RENEWAL.get(plan,plan)
+    return renewal,PLANS[renewal][2],PLANS[renewal][1]
 
 BOT_USERS_SYNC = """INSERT INTO bot_users(platform,user_id,premium_until)
 SELECT i.platform,i.user_id,a.premium_until FROM premium_identities i JOIN premium_accounts a ON a.id=i.account_id
@@ -57,12 +67,25 @@ def schema():
             # A subscription started from an email session cannot be cancelled from a chat-link session.
             c.execute('ALTER TABLE premium_subscriptions ADD COLUMN IF NOT EXISTS created_via_link BOOLEAN NOT NULL DEFAULT FALSE')
 
+REJECTED_TEXT='ЮKassa отклонила платёж. Проверьте данные и попробуйте оформить заказ заново; если ошибка повторится, напишите в поддержку support@chatwithyou.site.'
+
+class ProviderRejected(HTTPException):
+    """YooKassa definitively refused to create a payment (HTTP 4xx other than 429): nothing exists on its side."""
+    def __init__(self): super().__init__(502,REJECTED_TEXT)
+
 class Provider:
     def request(self,method,path,body=None,key=None):
         shop=os.getenv('YOOKASSA_SHOP_ID',''); secret=os.getenv('YOOKASSA_SECRET_KEY','')
         if not shop or not secret: raise HTTPException(503,'ЮKassa не настроена')
         try:
             response=httpx.request(method,'https://api.yookassa.ru/v3/'+path,auth=(shop,secret),json=body,headers={'Idempotence-Key':str(key)} if key else {},timeout=20)
+            if method=='POST' and response.status_code in (400,401,403,404,422):
+                try: info=response.json()
+                except ValueError: info={}
+                if not isinstance(info,dict): info={}
+                # Only the response code/description are logged: never keys, email or the request body.
+                logging.warning('YooKassa rejected payment creation: http=%s code=%s description=%s',response.status_code,info.get('code'),info.get('description'))
+                raise ProviderRejected()
             response.raise_for_status()
             return response.json()
         except (httpx.HTTPError,ValueError) as error:
@@ -89,7 +112,7 @@ def payload(order,email,method=None):
         body['receipt']={'customer':{'email':email},'items':[{'description':body['description'],'quantity':'1.00','amount':body['amount'],'vat_code':int(vat),'payment_subject':subject,'payment_mode':'full_payment'}]}
     return body
 
-def create_order(uid,plan,key,email,renew=False,via_link=False):
+def create_order(uid,plan,key,email,renew=False,via_link=False,consent_version=CONSENT_VERSION):
     plan=ALIASES.get(plan,plan)
     if plan not in PLANS: raise HTTPException(422,'Неизвестный тариф')
     with connect() as c:
@@ -112,7 +135,7 @@ def create_order(uid,plan,key,email,renew=False,via_link=False):
             body=payload(order,email,sub['method_id'] if renew else None)
             row=c.execute("INSERT INTO premium_orders(id,account_id,amount_rub,period_hours,status,plan_id,request_key,payload) VALUES(%s,%s,%s,%s,'pending',%s,%s,%s) RETURNING *",(order['id'],uid,order['amount_rub'],PLANS[plan][1]*24,plan,key,Jsonb(body))).fetchone()
             if not renew:
-                c.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,created_via_link) VALUES(%s,%s,%s,'2026-11-02',%s) ON CONFLICT(account_id) DO UPDATE SET plan_id=EXCLUDED.plan_id,email=EXCLUDED.email,auto_renew=TRUE,method_id=NULL,consent_version=EXCLUDED.consent_version,created_via_link=premium_subscriptions.created_via_link AND EXCLUDED.created_via_link",(uid,plan,email,via_link))
+                c.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,created_via_link) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(account_id) DO UPDATE SET plan_id=EXCLUDED.plan_id,email=EXCLUDED.email,auto_renew=TRUE,method_id=NULL,consent_version=EXCLUDED.consent_version,created_via_link=premium_subscriptions.created_via_link AND EXCLUDED.created_via_link",(uid,plan,email,consent_version,via_link))
             return row
 
 def process(order_id,provider=None):
@@ -131,7 +154,14 @@ def process(order_id,provider=None):
                 c.execute("UPDATE premium_orders SET provider_status='manual_review' WHERE id=%s",(order_id,))
                 c.execute('UPDATE premium_subscriptions SET auto_renew=FALSE WHERE account_id=%s',(uid,))
                 return c.execute('SELECT * FROM premium_orders WHERE id=%s',(order_id,)).fetchone()
-            payment=provider.request('GET','payments/'+row['payment_id']) if row['payment_id'] else provider.request('POST','payments',row['payload'],row['id'])
+            try: payment=provider.request('GET','payments/'+row['payment_id']) if row['payment_id'] else provider.request('POST','payments',row['payload'],row['id'])
+            except ProviderRejected:
+                # Confirmed refusal at creation: no payment exists, so the order is final and a new one may be made.
+                renewal='payment_method_id' in row['payload']
+                with c.transaction():
+                    c.execute("UPDATE premium_orders SET status='failed',provider_status='rejected' WHERE id=%s",(order_id,))
+                    if renewal: c.execute('UPDATE premium_subscriptions SET auto_renew=FALSE WHERE account_id=%s',(uid,))
+                raise
             provider.validate(payment,row)
             status=payment.get('status')
             if status not in ('pending','waiting_for_capture','succeeded','canceled'): raise HTTPException(409,'Неизвестный статус оплаты')
@@ -141,7 +171,7 @@ def process(order_id,provider=None):
                     if payment.get('paid') is not True: raise HTTPException(409,'Платёж не оплачен')
                     until=c.execute("UPDATE premium_accounts SET premium_until=GREATEST(COALESCE(premium_until,NOW()),NOW())+(%s * INTERVAL '1 hour'),trial_used=trial_used OR %s WHERE id=%s RETURNING premium_until",(row['period_hours'],row['plan_id']=='trial',uid)).fetchone()['premium_until']
                     method=payment.get('payment_method',{}); saved=method.get('saved') is True and bool(method.get('id'))
-                    c.execute("UPDATE premium_subscriptions SET period_end=%s,plan_id=%s,trial_used=trial_used OR %s,method_id=%s,auto_renew=auto_renew AND %s WHERE account_id=%s",(until,'week' if row['plan_id']=='trial' else row['plan_id'],row['plan_id']=='trial',method.get('id') if saved else None,saved,uid))
+                    c.execute("UPDATE premium_subscriptions SET period_end=%s,plan_id=%s,trial_used=trial_used OR %s,method_id=%s,auto_renew=auto_renew AND %s WHERE account_id=%s",(until,renewal_terms(row['plan_id'])[0],row['plan_id']=='trial',method.get('id') if saved else None,saved,uid))
                     c.execute("UPDATE premium_orders SET status='paid',applied_at=NOW() WHERE id=%s",(order_id,))
                     sync_bot_users(c,uid)
                 elif status=='canceled':
@@ -174,7 +204,7 @@ def cancel(account_id):
     with connect() as c:
         with c.transaction():
             c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(str(account_id),))
-            c.execute('UPDATE premium_subscriptions SET auto_renew=FALSE WHERE account_id=%s',(account_id,))
+            c.execute('UPDATE premium_subscriptions SET auto_renew=FALSE,method_id=NULL WHERE account_id=%s',(account_id,))
 
 def webhook(payment_id,provider=None):
     from uuid import UUID

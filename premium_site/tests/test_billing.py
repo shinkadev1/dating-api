@@ -8,6 +8,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi import HTTPException
+import httpx
 import psycopg
 from psycopg.rows import dict_row
 from app import billing
@@ -22,13 +23,54 @@ class ProviderTests(unittest.TestCase):
             for key,value in [('id','other'),('recipient',{'account_id':'other'}),('test',False),('amount',{'value':'0.01','currency':'RUB'}),('metadata',{'order_id':str(uuid4())})]:
                 with self.subTest(key=key),self.assertRaises(HTTPException): billing.Provider().validate(original|{key:value},order)
 
+    def test_renewal_terms(self):
+        self.assertEqual(billing.renewal_terms('trial'),('week',299,7))
+        self.assertEqual(billing.renewal_terms('month'),('month',999,30))
+        self.assertEqual(billing.renewal_terms('optimal'),('month',999,30))
+        self.assertEqual(billing.CONSENT_VERSION,'2026-11-04')
+
+
+class FakeResponse:
+    def __init__(self,status,body=None): self.status_code=status;self.body=body
+    def json(self):
+        if self.body is None: raise ValueError('no json')
+        return self.body
+    def raise_for_status(self):
+        if self.status_code>=400: raise httpx.HTTPStatusError('x',request=None,response=self)
+
+
+class ProviderErrorTests(unittest.TestCase):
+    def call(self,status,method='POST',body=None):
+        with patch.dict(os.environ,{'YOOKASSA_SHOP_ID':'shop','YOOKASSA_SECRET_KEY':'secret-value'}),patch.object(billing.httpx,'request',return_value=FakeResponse(status,body)):
+            return billing.Provider().request(method,'payments',{'amount':1},'key')
+
+    def test_confirmed_refusals_are_rejected_without_leaking_details(self):
+        for status in (400,401,403,404,422):
+            with self.subTest(status=status),self.assertLogs(level='WARNING') as logs:
+                with self.assertRaises(billing.ProviderRejected) as caught: self.call(status,body={'code':'invalid_request','description':'Bad amount','secret':'secret-value'})
+                self.assertNotIn('Bad amount',str(caught.exception.detail))
+                text=' '.join(logs.output)
+                self.assertIn('invalid_request',text);self.assertIn('Bad amount',text);self.assertNotIn('secret-value',text)
+
+    def test_unknown_outcomes_stay_503(self):
+        for status in (429,500,502,503):
+            with self.subTest(status=status),self.assertRaises(HTTPException) as caught:
+                self.call(status)
+            self.assertEqual(caught.exception.status_code,503);self.assertNotIsInstance(caught.exception,billing.ProviderRejected)
+        with patch.dict(os.environ,{'YOOKASSA_SHOP_ID':'shop','YOOKASSA_SECRET_KEY':'k'}),patch.object(billing.httpx,'request',side_effect=httpx.ConnectError('down')):
+            with self.assertRaises(HTTPException) as caught: billing.Provider().request('POST','payments',{},'key')
+        self.assertEqual(caught.exception.status_code,503)
+        with self.assertRaises(HTTPException) as caught: self.call(404,method='GET')
+        self.assertEqual(caught.exception.status_code,503)
+
 
 class FakeProvider(billing.Provider):
-    def __init__(self): self.payments={};self.calls=[];self.lose=False;self.status='succeeded';self.saved=True
+    def __init__(self): self.payments={};self.calls=[];self.lose=False;self.reject=False;self.status='succeeded';self.saved=True
     def request(self,method,path,body=None,key=None):
         self.calls.append((method,path,copy.deepcopy(body),str(key)))
         if method=='GET': return copy.deepcopy(next(p for p in self.payments.values() if 'payments/'+p['id']==path))
         key=str(key)
+        if self.reject: raise billing.ProviderRejected()
         if key not in self.payments:
             self.payments[key]={'id':str(uuid4()),'recipient':{'account_id':'shop'},'test':True,'amount':body['amount'],'metadata':body['metadata'],'status':self.status,'paid':self.status=='succeeded','payment_method':{'id':'saved','saved':self.saved}}
         if self.lose:
@@ -135,6 +177,54 @@ class PostgresTests(unittest.TestCase):
         with patch.object(billing,'Provider',return_value=self.provider):billing.tick()
         self.assertEqual(len(self.provider.payments),2)
         self.assertEqual(until,self.row('SELECT premium_until FROM premium_accounts')['premium_until'])
+
+    def test_rejected_creation_fails_order_and_allows_new_one_at_once(self):
+        self.provider.reject=True;order=self.create('week')
+        with self.assertRaises(billing.ProviderRejected): billing.process(order['id'],self.provider)
+        row=self.row('SELECT * FROM premium_orders')
+        self.assertEqual((row['status'],row['provider_status']),('failed','rejected'))
+        self.assertIsNone(row['payment_id'])
+        self.provider.reject=False;second=self.create('week')
+        self.assertNotEqual(second['id'],order['id'])
+        self.assertEqual(billing.process(second['id'],self.provider)['status'],'paid')
+
+    def test_unknown_outcome_keeps_pending_and_retries_same_idempotence_key(self):
+        order=self.create('week');self.provider.lose=True
+        with self.assertRaises(HTTPException) as caught: billing.process(order['id'],self.provider)
+        self.assertEqual(caught.exception.status_code,503)
+        self.assertEqual(self.row('SELECT status FROM premium_orders')['status'],'pending')
+        billing.process(order['id'],self.provider)
+        posts=[c for c in self.provider.calls if c[0]=='POST']
+        self.assertEqual(len(posts),2);self.assertEqual(posts[0][3],posts[1][3]);self.assertEqual(posts[0][3],str(order['id']))
+
+    def test_rejected_renewal_disables_auto_renew(self):
+        order=self.create();billing.process(order['id'],self.provider)
+        self.execute("UPDATE premium_subscriptions SET period_end=NOW()-INTERVAL '1 hour'")
+        self.provider.reject=True
+        with patch.object(billing,'Provider',return_value=self.provider):billing.tick()
+        sub=self.row('SELECT * FROM premium_subscriptions')
+        self.assertFalse(sub['auto_renew'])
+        renewal=self.row("SELECT * FROM premium_orders WHERE plan_id='week'")
+        self.assertEqual((renewal['status'],renewal['provider_status']),('failed','rejected'))
+
+    def test_cancel_clears_saved_card_and_tick_does_not_renew(self):
+        order=self.create();billing.process(order['id'],self.provider)
+        self.assertEqual(self.row('SELECT method_id FROM premium_subscriptions')['method_id'],'saved')
+        billing.cancel(self.account)
+        sub=self.row('SELECT * FROM premium_subscriptions')
+        self.assertFalse(sub['auto_renew']);self.assertIsNone(sub['method_id'])
+        self.execute("UPDATE premium_subscriptions SET period_end=NOW()-INTERVAL '1 hour'")
+        with patch.object(billing,'Provider',return_value=self.provider):billing.tick()
+        self.assertEqual(len([c for c in self.provider.calls if c[0]=='POST']),1)
+
+    def test_consent_version_saved_and_trial_renews_as_week(self):
+        order=billing.create_order(self.account,'trial',uuid4(),'x@example.test')
+        self.assertEqual(self.row('SELECT consent_version FROM premium_subscriptions')['consent_version'],'2026-11-04')
+        billing.process(order['id'],self.provider)
+        self.assertEqual(self.row('SELECT plan_id FROM premium_subscriptions')['plan_id'],'week')
+        self.execute('DELETE FROM premium_orders');self.execute('DELETE FROM premium_subscriptions');self.execute('UPDATE premium_accounts SET premium_until=NULL')
+        billing.create_order(self.account,'month',uuid4(),'x@example.test',consent_version='custom')
+        self.assertEqual(self.row('SELECT consent_version FROM premium_subscriptions')['consent_version'],'custom')
 
 
 if __name__=='__main__':unittest.main()
