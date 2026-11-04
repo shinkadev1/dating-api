@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -9,6 +10,10 @@ import aioboto3
 from botocore.config import Config
 
 logger = logging.getLogger(__name__)
+
+# Проверка бакета при старте не должна держать запуск API: при недоступном S3 без лимитов
+# botocore ждёт по 60 с на соединение с повторами, и chat-api минутами не слушает порт.
+STARTUP_CHECK_SECONDS = 10.0
 
 
 class StorageError(Exception):
@@ -21,6 +26,8 @@ def _s3_config() -> Config:
         "signature_version": "s3v4",
         "s3": {"addressing_style": "path"},
         "retries": {"max_attempts": 3, "mode": "standard"},
+        "connect_timeout": 5,
+        "read_timeout": 30,
     }
     try:
         return Config(
@@ -69,10 +76,20 @@ class ObjectStorage:
                 config=_s3_config(),
             )
             self._client = await self._client_cm.__aenter__()
-            await self._client.head_bucket(Bucket=self._bucket)
         except Exception:
-            logger.exception("Не открыл бакет %s", self._bucket)
+            logger.exception("Не создал клиент S3 для бакета %s", self._bucket)
             await self.close()
+            return
+        try:
+            await asyncio.wait_for(self._client.head_bucket(Bucket=self._bucket), STARTUP_CHECK_SECONDS)
+        except Exception as exc:
+            code = str(getattr(exc, "response", {}).get("Error", {}).get("Code", ""))
+            if code in {"403", "404", "AccessDenied", "NoSuchBucket", "InvalidAccessKeyId", "SignatureDoesNotMatch"}:
+                logger.error("S3 бакет %s отклонил доступ (%s): медиа выключено", self._bucket, code)
+                await self.close()
+                return
+            # Сеть или таймаут: клиент остаётся, когда S3 вернётся, загрузки заработают без перезапуска API.
+            logger.warning("S3 бакет %s недоступен при старте (%s: %s); загрузки будут пробовать снова", self._bucket, type(exc).__name__, exc)
             return
         logger.info("S3 бакет %s готов", self._bucket)
 
