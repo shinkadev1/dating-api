@@ -124,12 +124,16 @@ class CheckoutTests(unittest.TestCase):
     def test_rejection_shows_notice_and_allows_new_order(self):
         self.login(); self.psp.mode = 'reject'
         response = self.post()
-        self.assertEqual(response.status_code, 502); self.assertIn('ЮKassa отклонила платёж', response.text); self.assertIn('support@chatwithyou.site', response.text)
+        self.assertEqual(response.status_code, 409); self.assertIn('ЮKassa отклонила платёж', response.text); self.assertIn('support@chatwithyou.site', response.text)
         row = self.row('SELECT * FROM premium_orders'); self.assertEqual((row['status'], row['provider_status']), ('failed', 'rejected'))
         page = self.client.get('/orders/' + str(row['id'])).text
         self.assertIn('Отклонён ЮKassa', page); self.assertIn('Создать новый заказ', page); self.assertNotIn('Проверить оплату', page)
         self.psp.mode = 'ok'
         self.assertEqual(self.post().status_code, 303)
+
+    def test_days_filter_declension(self):
+        from app.main import plural_days
+        for n, text in [(1, '1 день'), (2, '2 дня'), (3, '3 дня'), (5, '5 дней'), (11, '11 дней'), (14, '14 дней'), (21, '21 день'), (22, '22 дня'), (30, '30 дней'), (365, '365 дней')]: self.assertEqual(plural_days(n), text)
 
     def test_unknown_outcome_shows_notice_with_order_link_and_keeps_pending(self):
         self.login(); self.psp.mode = 'unknown'
@@ -144,7 +148,7 @@ class CheckoutTests(unittest.TestCase):
         account = self.login()
         order = uuid4()
         with billing.connect() as c: c.execute("INSERT INTO premium_orders(id,account_id,amount_rub,period_hours,status,plan_id) VALUES(%s,%s,299,168,'paid','week')", (order, account))
-        self.assertIn('Оплачен', self.client.get('/orders/' + str(order)).text)
+        self.assertIn('Оплачен', self.client.get('/orders/' + str(order)).text); self.assertIn('7 дней', self.client.get('/orders/' + str(order)).text)
         with billing.connect() as c: c.execute("UPDATE premium_orders SET status='pending',provider_status='manual_review'")
         self.assertIn('Проверка поддержкой', self.client.get('/orders/' + str(order)).text)
 

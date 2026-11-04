@@ -5,7 +5,7 @@
 <section class="panel">
   <p>Тариф: {{ subscription.plan_id }}. Автопродление: <strong>{{ 'включено' if subscription.auto_renew else 'отключено' }}</strong>.</p>
   <p>Карта: <strong>{{ 'привязана' if subscription.method_id else 'отвязана' }}</strong>.</p>
-  {% if subscription.auto_renew and subscription.period_end %}<p>Следующее списание: {{ subscription.period_end|dt }}, {{ renewal.price }} ₽ за {{ renewal.days }} дней (тариф «{{ renewal.name }}»).</p>{% endif %}
+  {% if subscription.auto_renew and subscription.period_end %}<p>Следующее списание: {{ subscription.period_end|dt }}, {{ renewal.price }} ₽ за {{ renewal.days|days }} (тариф «{{ renewal.name }}»).</p>{% endif %}
   {% if can_cancel %}<form method="post" action="/subscription/cancel"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn secondary">Отключить автопродление</button></form>{% else %}<p class="muted">Отключить автопродление можно после входа по email.</p>{% endif %}
   <p class="muted small">Оплаченный срок сохраняется. Отключение отвязывает карту; уже начатый платёж может завершиться.</p>
 </section>

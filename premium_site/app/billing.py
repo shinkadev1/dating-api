@@ -71,7 +71,7 @@ REJECTED_TEXT='ЮKassa отклонила платёж. Проверьте да�
 
 class ProviderRejected(HTTPException):
     """YooKassa definitively refused to create a payment (HTTP 4xx other than 429): nothing exists on its side."""
-    def __init__(self): super().__init__(502,REJECTED_TEXT)
+    def __init__(self): super().__init__(409,REJECTED_TEXT)  # 4xx: a Cloudflare tunnel may replace 5xx bodies with its own page
 
 class Provider:
     def request(self,method,path,body=None,key=None):
@@ -148,6 +148,15 @@ def process(order_id,provider=None):
         c.execute('SELECT pg_advisory_lock(hashtextextended(%s,0))',(str(uid),))
         try:
             row=c.execute('SELECT * FROM premium_orders WHERE id=%s',(order_id,)).fetchone()
+            if row['status']=='failed' and row['payment_id'] and row['provider_status'] not in ('manual_review','canceled'):
+                # YooKassa created a payment for an order we already closed: never grant silently, flag it for support.
+                payment=provider.request('GET','payments/'+row['payment_id'])
+                provider.validate(payment,row)
+                if payment.get('status')=='succeeded' and payment.get('paid') is True:
+                    logging.error('Payment succeeded for a closed order, manual review needed: order=%s payment=%s',row['id'],row['payment_id'])
+                    c.execute("UPDATE premium_orders SET provider_status='manual_review' WHERE id=%s",(order_id,))
+                    row=c.execute('SELECT * FROM premium_orders WHERE id=%s',(order_id,)).fetchone()
+                return row
             if row['status']!='pending' or (row['provider_status']=='manual_review' and not row['payment_id']): return row
             if not row['payload']: raise HTTPException(409,'Старый счёт не поддерживает оплату')
             if not row['payment_id'] and datetime.now(timezone.utc)-row['created_at']>timedelta(hours=23):
@@ -171,7 +180,7 @@ def process(order_id,provider=None):
                     if payment.get('paid') is not True: raise HTTPException(409,'Платёж не оплачен')
                     until=c.execute("UPDATE premium_accounts SET premium_until=GREATEST(COALESCE(premium_until,NOW()),NOW())+(%s * INTERVAL '1 hour'),trial_used=trial_used OR %s WHERE id=%s RETURNING premium_until",(row['period_hours'],row['plan_id']=='trial',uid)).fetchone()['premium_until']
                     method=payment.get('payment_method',{}); saved=method.get('saved') is True and bool(method.get('id'))
-                    c.execute("UPDATE premium_subscriptions SET period_end=%s,plan_id=%s,trial_used=trial_used OR %s,method_id=%s,auto_renew=auto_renew AND %s WHERE account_id=%s",(until,renewal_terms(row['plan_id'])[0],row['plan_id']=='trial',method.get('id') if saved else None,saved,uid))
+                    c.execute("UPDATE premium_subscriptions SET period_end=%s,plan_id=%s,trial_used=trial_used OR %s,method_id=CASE WHEN auto_renew AND %s THEN %s ELSE NULL END,auto_renew=auto_renew AND %s WHERE account_id=%s",(until,renewal_terms(row['plan_id'])[0],row['plan_id']=='trial',saved,method.get('id') if saved else None,saved,uid))
                     c.execute("UPDATE premium_orders SET status='paid',applied_at=NOW() WHERE id=%s",(order_id,))
                     sync_bot_users(c,uid)
                 elif status=='canceled':

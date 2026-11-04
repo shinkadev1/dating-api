@@ -217,6 +217,25 @@ class PostgresTests(unittest.TestCase):
         with patch.object(billing,'Provider',return_value=self.provider):billing.tick()
         self.assertEqual(len([c for c in self.provider.calls if c[0]=='POST']),1)
 
+    def test_payment_for_closed_order_goes_to_manual_review(self):
+        self.provider.reject=True;order=self.create('week')
+        with self.assertRaises(billing.ProviderRejected): billing.process(order['id'],self.provider)
+        self.provider.reject=False
+        # YooKassa nevertheless created and captured the payment for the order we closed.
+        self.provider.payments['late']={'id':str(uuid4()),'recipient':{'account_id':'shop'},'test':True,'amount':{'value':'299.00','currency':'RUB'},'metadata':{'order_id':str(order['id'])},'status':'succeeded','paid':True,'payment_method':{'id':'saved','saved':True}}
+        with self.assertLogs(level='ERROR') as logs: billing.webhook(self.provider.payments['late']['id'],self.provider)
+        row=self.row('SELECT * FROM premium_orders')
+        self.assertEqual((row['status'],row['provider_status'],row['payment_id']),('failed','manual_review',self.provider.payments['late']['id']))
+        self.assertIsNone(self.row('SELECT premium_until FROM premium_accounts')['premium_until'])
+        self.assertNotIn('payer@example.test',''.join(logs.output))
+
+    def test_late_payment_after_cancel_does_not_resave_card(self):
+        order=self.create('week');billing.cancel(self.account)
+        self.assertEqual(billing.process(order['id'],self.provider)['status'],'paid')
+        sub=self.row('SELECT * FROM premium_subscriptions')
+        self.assertFalse(sub['auto_renew']);self.assertIsNone(sub['method_id'])
+        self.assertIsNotNone(self.row('SELECT premium_until FROM premium_accounts')['premium_until'])
+
     def test_consent_version_saved_and_trial_renews_as_week(self):
         order=billing.create_order(self.account,'trial',uuid4(),'x@example.test')
         self.assertEqual(self.row('SELECT consent_version FROM premium_subscriptions')['consent_version'],'2026-11-04')

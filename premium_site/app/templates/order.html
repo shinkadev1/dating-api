@@ -1,6 +1,6 @@
 {% extends 'base.html' %}{% block title %}Заказ №{{ short_id }}{% endblock %}
 {% block content %}
-<div class="total"><span>{{ order.period_hours // 24 }} дней</span><strong>{{ order.amount_rub }} ₽</strong></div>
+<div class="total"><span>{{ (order.period_hours // 24)|days }}</span><strong>{{ order.amount_rub }} ₽</strong></div>
 {% if order.status=='paid' %}
   <p class="state ok">Оплачен. Премиум начислен.</p>
 {% elif order.provider_status=='manual_review' %}

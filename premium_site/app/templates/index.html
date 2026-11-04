@@ -20,7 +20,7 @@
   {% for card in cards %}
     <section class="plan">
       <h2>{{ card.name }}</h2>
-      <p class="plan-price">{{ card.price }} ₽ <span>за {{ card.days }} {{ 'дня' if card.days==3 else 'дней' }}</span></p>
+      <p class="plan-price">{{ card.price }} ₽ <span>за {{ card.days|days }}</span></p>
       <p class="muted small">{% if card.trial %}Пробный период доступен один раз. После {{ card.days }} дней — {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% else %}Затем {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% endif %}</p>
       <a class="btn" href="/?plan={{ card.id }}">Выбрать</a>
     </section>
@@ -29,7 +29,7 @@
 {% elif owner.account_id %}
   <section class="order">
     <div class="order-head"><span>Заказ</span><a href="/">Другой тариф</a></div>
-    <h2 class="order-title">{{ chosen.name }} — {{ chosen.days }} {{ 'дня' if chosen.days==3 else 'дней' }}</h2>
+    <h2 class="order-title">{{ chosen.name }} — {{ chosen.days|days }}</h2>
     <div class="total"><span>К оплате</span><strong>{{ chosen.price }} ₽</strong></div>
     <p class="muted">Премиум начисляется сразу после подтверждения оплаты.</p>
 

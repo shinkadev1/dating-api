@@ -20,7 +20,16 @@ templates=Jinja2Templates(directory=APP_DIR/'templates')
 def format_time(value):
     return value.astimezone(timezone.utc).strftime('%d.%m.%Y %H:%M UTC') if value else ''
 
+def plural_days(value):
+    n=int(value); tail=n%100
+    if 11<=tail<=14: word='дней'
+    elif n%10==1: word='день'
+    elif 2<=n%10<=4: word='дня'
+    else: word='дней'
+    return f'{n} {word}'
+
 templates.env.filters['dt']=format_time
+templates.env.filters['days']=plural_days
 
 @app.on_event('startup')
 def prepare_database():
