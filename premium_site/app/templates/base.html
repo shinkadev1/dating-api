@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Premium — neon chat</title>
+<link rel="stylesheet" href="/static/payment.css">
+<body>
+<main class="card">
+  <header class="card-head">
+    <a class="brand" href="/">neon chat</a>
+    {% if owner.account_id %}
+    <div class="who">
+      <span>{{ owner.email if owner.email and not owner.via_link else 'Вход по ссылке из чата' }}</span>
+      <a href="/account">Аккаунт</a>
+      <form method="post" action="/auth/logout" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="link">Выйти</button></form>
+    </div>
+    {% endif %}
+  </header>
+  <div class="card-body">
+    {% if profile %}<p class="profile" role="status"><strong>Премиум для профиля {{ profile }} из чата.</strong> Оплата здесь продлит доступ именно этому профилю.</p>{% endif %}
+    <h1>{% block title %}Premium{% endblock %}</h1>
+    {% block content %}{% endblock %}
+  </div>
+  <footer class="card-foot">
+    <p><a href="https://chatwithyou.site/terms/">Условия</a> · <a href="https://chatwithyou.site/policy/">Конфиденциальность</a></p>
+    <p class="copy">© {{ year }} neon chat · <a href="mailto:support@chatwithyou.site">support@chatwithyou.site</a></p>
+  </footer>
+</main>
+</body>
+</html>

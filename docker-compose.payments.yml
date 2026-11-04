@@ -1,0 +1,62 @@
+# Страница оплаты премиума (premium_site, ЮKassa) и планировщик автопродлений.
+# Накладывается на основной docker-compose.yml: та же сеть проекта и та же база, что у chat-api.
+# Локально: docker compose -f docker-compose.yml -f docker-compose.payments.yml --profile payments up --build
+# premium_site пишет bot_users.premium_until, по нему chat-api пропускает медиа.
+# PREMIUM_LINK_SECRET должен совпадать с chat-api: им подписаны ссылки на оплату из чатов.
+x-pay-env: &pay-env
+  DATABASE_URL: postgresql://supabase_admin:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}
+  PAY_PUBLIC_URL: ${PAY_PUBLIC_URL:-https://pay.chatwithyou.site}
+  PAY_SECURE_COOKIE: ${PAY_SECURE_COOKIE:-true}
+  PAY_AUTH_SECRET: ${PAY_AUTH_SECRET:-}
+  PREMIUM_LINK_SECRET: ${PREMIUM_LINK_SECRET:-}
+  RESEND_API_KEY: ${RESEND_API_KEY:-}
+  AUTH_MAIL_FROM: ${AUTH_MAIL_FROM:-neon chat <noreply@chatwithyou.site>}
+  PREM_SERVICE_VK_TOKEN: ${PREM_SERVICE_VK_TOKEN:-}
+  PREM_SERVICE_TG_TOKEN: ${PREM_SERVICE_TG_TOKEN:-}
+  PREM_SERVICE_WEB_TOKEN: ${PREM_SERVICE_WEB_TOKEN:-}
+  YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
+  YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY:-}
+  YOOKASSA_TEST_MODE: ${YOOKASSA_TEST_MODE:-true}
+  YOOKASSA_RECEIPT_MODE: ${YOOKASSA_RECEIPT_MODE:-}
+  YOOKASSA_VAT_CODE: ${YOOKASSA_VAT_CODE:-}
+  YOOKASSA_PAYMENT_SUBJECT: ${YOOKASSA_PAYMENT_SUBJECT:-}
+  YOOKASSA_WEBHOOK_IPS: ${YOOKASSA_WEBHOOK_IPS:-}
+
+services:
+  premium:
+    image: ${PREMIUM_IMAGE:-dating-premium:local}
+    build: ./premium_site
+    container_name: vk-premium-web
+    profiles: ["payments"]
+    restart: unless-stopped
+    # cloudflared ходит к premium:8000 по сети Compose, порт хоста ему не нужен. Публикация только для
+    # отладки с самого сервера и на редком loopback-порту, чтобы не столкнуться с другими сервисами.
+    ports:
+      - "${PREMIUM_PUBLISH:-127.0.0.1:18080}:8000"
+    environment:
+      <<: *pay-env
+      # Кому верить в X-Forwarded-For (адреса через запятую). По умолчанию никому снаружи контейнера:
+      # IP клиента — адрес соединения. За прокси укажите его адрес, как его видит контейнер
+      # (обычно шлюз сети Docker), и пусть прокси перезаписывает X-Forwarded-For адресом клиента.
+      FORWARDED_ALLOW_IPS: ${PREMIUM_FORWARDED_ALLOW_IPS:-127.0.0.1}
+    depends_on:
+      db:
+        condition: service_healthy
+      # bot_users создаёт схема chat-api; без неё оплата не выдаст доступ к медиа.
+      chat-api:
+        condition: service_healthy
+
+  premium-scheduler:
+    image: ${PREMIUM_IMAGE:-dating-premium:local}
+    build: ./premium_site
+    container_name: vk-premium-scheduler
+    profiles: ["payments"]
+    command: ["python", "-m", "app.scheduler"]
+    restart: unless-stopped
+    environment:
+      <<: *pay-env
+    depends_on:
+      db:
+        condition: service_healthy
+      chat-api:
+        condition: service_healthy

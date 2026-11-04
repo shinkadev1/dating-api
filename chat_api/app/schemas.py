@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -13,6 +14,12 @@ LeftReason = Literal["stopped", "reported", "undeliverable"]
 
 class StateOut(BaseModel):
     phase: Phase = Field(description="`idle` — вне чата, `searching` — в очереди, `chatting` — в диалоге")
+
+
+class PremiumLinkOut(BaseModel):
+    url: str = Field(description="Страница оплаты с подписанным utm_content; действует 24 часа")
+    premium_active: bool = Field(description="Премиум действует сейчас")
+    premium_until: datetime | None = Field(description="До какого момента оплачен премиум")
 
 
 class VisitorIn(BaseModel):

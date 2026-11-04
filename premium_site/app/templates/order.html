@@ -1,0 +1,22 @@
+{% extends 'base.html' %}{% block title %}Заказ №{{ short_id }}{% endblock %}
+{% block content %}
+<div class="total"><span>{{ (order.period_hours // 24)|days }}</span><strong>{{ order.amount_rub }} ₽</strong></div>
+{% if order.status=='paid' %}
+  <p class="state ok">Оплачен. Премиум начислен.</p>
+{% elif order.provider_status=='manual_review' %}
+  <p class="state warn">Проверка поддержкой. Новый платёж не создаётся, напишите на support@chatwithyou.site.</p>
+{% elif order.provider_status=='rejected' %}
+  <p class="state bad">Отклонён ЮKassa. Деньги не списаны. Можно создать новый заказ.</p>
+{% elif order.status=='failed' %}
+  <p class="state bad">Платёж отменён. Можно создать новый заказ.</p>
+{% else %}
+  <p class="state wait">Ожидает оплаты. Возврат на эту страницу сам по себе оплату не подтверждает.</p>
+{% endif %}
+{% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+{% if order.confirmation_url and order.status=='pending' and order.provider_status!='manual_review' %}<a class="btn" href="{{ order.confirmation_url }}" rel="noreferrer">Оплатить в ЮKassa</a>{% endif %}
+{% if order.status=='pending' and order.provider_status!='manual_review' %}
+<form method="post" action="/orders/{{ order.id }}/refresh"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn secondary">Проверить оплату</button></form>
+{% endif %}
+{% if order.status=='failed' %}<a class="btn" href="/?plan={{ order.plan_id or '' }}">Создать новый заказ</a>{% endif %}
+<p class="small"><a href="/account">Аккаунт и подписка</a></p>
+{% endblock %}

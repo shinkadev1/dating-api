@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from psycopg import AsyncConnection
@@ -291,6 +292,22 @@ async def user_is_premium(conn: AsyncConnection, peer: Peer) -> bool:
     )
     row = await cursor.fetchone()
     return bool(row and row["active"])
+
+
+async def user_premium_until(conn: AsyncConnection, peer: Peer) -> datetime | None:
+    """Срок премиума из bot_users. Его пишет premium_site после оплаты."""
+    if peer.is_engine:
+        return None
+    cursor = await conn.execute(
+        """
+        SELECT premium_until
+        FROM bot_users
+        WHERE platform = %(platform)s AND user_id = %(user_id)s
+        """,
+        {"platform": peer.platform, "user_id": peer.user_id},
+    )
+    row = await cursor.fetchone()
+    return row["premium_until"] if row else None
 
 
 async def record_search(conn: AsyncConnection, peer: Peer) -> None:

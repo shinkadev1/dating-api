@@ -78,6 +78,9 @@ services:
       S3_BUCKET: ${S3_BUCKET:-}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
       S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+      # Подпись ссылок на оплату премиума; тот же секрет у premium_site. Без него /premium/link — 503.
+      PREMIUM_LINK_SECRET: ${PREMIUM_LINK_SECRET:-}
+      PAY_PUBLIC_URL: ${PAY_PUBLIC_URL:-https://pay.chatwithyou.site}
     depends_on:
       db:
         condition: service_healthy

@@ -6,6 +6,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 from uuid import UUID
 
 from psycopg import AsyncConnection
@@ -38,6 +39,11 @@ Outbox = list[tuple[Peer, ChatEvent]]
 
 # Счётчики для сайта не обязаны быть точными до секунды, а запрос считает всю таблицу.
 _STATS_TTL_SECONDS = 5.0
+
+
+# Боты узнают отказ по 403 со словом «премиум» в detail и показывают своё предложение купить.
+MEDIA_NEEDS_PREMIUM = "Фото, видео и аудио можно отправлять только с премиумом"
+PARTNER_NEEDS_PREMIUM = "Собеседник без премиума не может получать медиа"
 
 
 class NotChattingError(Exception):
@@ -183,6 +189,27 @@ class ChatService:
     async def can_send_media(self, peer: Peer) -> bool:
         async with self._pool.connection() as conn:
             return await repo.user_is_premium(conn, peer)
+
+    async def premium_until(self, peer: Peer) -> datetime | None:
+        async with self._pool.connection() as conn:
+            return await repo.user_premium_until(conn, peer)
+
+    async def media_block_reason(self, peer: Peer) -> str | None:
+        """Почему медиа не уйдёт: нужен премиум у отправителя и у живого собеседника.
+
+        Собеседник из chat-engine премиума не требует, а сам chat-engine (engine_bridge) шлёт медиа
+        без проверки. Если пары уже нет, решает forward_media.
+        """
+        if peer.is_engine:
+            return None
+        async with self._pool.connection() as conn:
+            if not await repo.user_is_premium(conn, peer):
+                return MEDIA_NEEDS_PREMIUM
+            session = await repo.get_session(conn, peer)
+            partner = await self._linked_partner(conn, peer, session)
+            if partner is not None and not partner.is_engine and not await repo.user_is_premium(conn, partner):
+                return PARTNER_NEEDS_PREMIUM
+        return None
 
     async def search(self, peer: Peer) -> StateOut:
         """Встаёт в очередь. Прежний собеседник узнаёт, что диалог закончен."""
