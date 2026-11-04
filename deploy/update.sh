@@ -177,8 +177,6 @@ if [ "$payments" -eq 1 ]; then
   require_secret PAY_AUTH_SECRET
   require_secret YOOKASSA_SHOP_ID
   require_secret YOOKASSA_SECRET_KEY
-  require_secret RESEND_API_KEY
-  require_secret AUTH_MAIL_FROM
   ensure_secret PREM_SERVICE_VK_TOKEN
   ensure_secret PREM_SERVICE_TG_TOKEN
   ensure_secret PREM_SERVICE_WEB_TOKEN
@@ -190,6 +188,16 @@ if [ "$payments" -eq 1 ]; then
   if [ "$(sed -n 's/^YOOKASSA_RECEIPT_MODE=//p' .env | tail -n 1)" = "receipt" ]; then
     require_secret YOOKASSA_VAT_CODE
     require_secret YOOKASSA_PAYMENT_SUBJECT
+    # Чеку нужен email покупателя, а значит вход по коду из письма.
+    require_secret RESEND_API_KEY
+    require_secret AUTH_MAIL_FROM
+  else
+    # Без чеков покупатель входит по ссылке из бота; вход по email работает, только если задан Resend.
+    if ! optional_secret RESEND_API_KEY; then
+      echo "Нет RESEND_API_KEY: вход по email выключен, оплата по ссылке из бота."
+      drop_env RESEND_API_KEY
+    fi
+    optional_secret AUTH_MAIL_FROM || true
   fi
   if ! optional_secret YOOKASSA_WEBHOOK_IPS; then
     drop_env YOOKASSA_WEBHOOK_IPS

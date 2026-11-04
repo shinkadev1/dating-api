@@ -94,8 +94,11 @@ jobs:
         id: envfile
         env:
           ENV_FILE: ${{ secrets.ENV_FILE }}
+          # Настройки оплаты отдельным env-файлом (секрет PAYMENTS_ENV). ENV_FILE идёт после него,
+          # поэтому одинаковый ключ в ENV_FILE важнее (update.sh берёт последнее значение).
+          PAYMENTS_ENV: ${{ secrets.PAYMENTS_ENV }}
         run: |
-          b64=$(printf '%s' "$ENV_FILE" | base64 -w 0)
+          b64=$(printf '%s\n%s\n' "$PAYMENTS_ENV" "$ENV_FILE" | base64 -w 0)
           echo "::add-mask::$b64"
           echo "b64=$b64" >> "$GITHUB_OUTPUT"
 

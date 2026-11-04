@@ -15,7 +15,24 @@
 2. Если на `pay.chatwithyou.site` раньше был custom domain или route старого Worker, удалите его (Workers & Pages → Worker → Settings → Domains & Routes), иначе запросы уйдут в Worker, а не в туннель.
 3. DNS-запись `pay` должна указывать на туннель: CNAME на `<id>.cfargotunnel.com`, Cloudflare создаёт её сам при добавлении hostname.
 
-## 2. Секрет ENV_FILE (GitHub → Settings → Secrets → Actions)
+## 2. Секреты PAYMENTS_ENV и ENV_FILE (GitHub → Settings → Secrets → Actions)
+
+Настройки оплаты удобно держать в отдельном секрете **`PAYMENTS_ENV`** — это обычный env-файл (`КЛЮЧ=значение` по строке). Деплой склеивает его с `ENV_FILE`, причём `ENV_FILE` идёт вторым: если ключ задан в обоих, побеждает `ENV_FILE`. Сейчас (2026-11-05) в `PAYMENTS_ENV` лежит тестовый магазин:
+
+```
+PAYMENTS_ENABLED=true
+YOOKASSA_SHOP_ID=<id тестового магазина>
+YOOKASSA_SECRET_KEY=<test_…>
+YOOKASSA_TEST_MODE=true
+YOOKASSA_RECEIPT_MODE=exempt
+PREMIUM_LINK_SECRET=<случайные 48+ символов>
+PAY_AUTH_SECRET=<случайные 48+ символов>
+```
+
+Переход на боевой магазин: отредактируйте `PAYMENTS_ENV` (или допишите те же ключи в `ENV_FILE`) — `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` боевые, `YOOKASSA_TEST_MODE=false`; для чеков `YOOKASSA_RECEIPT_MODE=receipt` и ключи ниже. Затем Actions → Deploy → Re-run. `PREMIUM_LINK_SECRET` и `PAY_AUTH_SECRET` не меняйте без нужды: смена разлогинит покупателей и сделает недействительными выданные ссылки.
+
+Без чеков (`exempt`) Resend не обязателен: покупатель входит по ссылке из бота, вход по email отвечает «Письмо не отправлено». В режиме `receipt` нужны `RESEND_API_KEY` и `AUTH_MAIL_FROM` — чеку нужен email.
+
 
 Здесь только имена. Значения не храните в репозитории и не пересылайте в чатах.
 
@@ -25,7 +42,7 @@
 - `PREMIUM_LINK_SECRET`: не короче 32 символов. Тот же секрет подписывает ссылки в Chat API.
 - `PAY_AUTH_SECRET`: не короче 32 символов.
 - `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY`: сначала ключи **тестового** магазина.
-- `RESEND_API_KEY`, `AUTH_MAIL_FROM`: например `neon chat <noreply@chatwithyou.site>`. Домен должен быть подтверждён в Resend.
+- `RESEND_API_KEY`, `AUTH_MAIL_FROM` (только для `receipt`): например `neon chat <noreply@chatwithyou.site>`. Домен должен быть подтверждён в Resend.
 - `YOOKASSA_VAT_CODE`, `YOOKASSA_PAYMENT_SUBJECT`: для чеков (режим `receipt`). Значения уточните у бухгалтерии или в настройках онлайн-кассы ЮKassa.
 
 Необязательные (у деплоя есть значения по умолчанию):
