@@ -1,5 +1,9 @@
 # Состояние vk-bot
 
+## Ветка loop/dialog-history, 2026-11-10
+
+Worktree `.worktrees/vk-bot-dialog-history`, от origin/master 21a2a42. Добавлена история диалогов: `004_dialog_history.sql` (dialogs, messages, message_archives, chat_sessions.dialog_id), запись реплик в `ChatService`, суточный архиватор в S3 (`services/archive.py`, lock 7_310_003), настройки `MESSAGES_HOT_DAYS`/`MESSAGES_ARCHIVE_ENABLED`, счётчики в `deploy/update.sh` и `server-logs.yml`. Тесты без базы (`test_dialog_history.py`, `test_archive.py`) проходят вместе с прежними. Интеграционный `test_dialog_history_db.py` написан, но на момент записи не запускался на Postgres (в окружении нет Docker-демона и pgserver для Windows); до выкатки его нужно прогнать. Деплой не выполнялся.
+
 ## Ветка loop/supabase-storage-media, 2026-11-09 (повтор после отката)
 
 Медиа Chat API переключены на self-hosted Supabase Storage (`supabase/storage-api:v1.74.0`, S3-протокол, файловый бэкенд на томе `storage_data`), бакет `chat-media` создаётся пустым. Перенос из Beget убран: первый деплой завис на `rclone size` (Beget не работает), по решению пользователя старые медиа не переносятся. Для старых `media_id` `GET /media/{id}` отвечает 502 (запись в `stored_media` есть, объекта нет); 404 только без записи. `deploy/update.sh`: все сетевые шаги с `timeout`, ошибки печатаются; бакет создаётся до пересоздания chat-api; повторный деплой на уже созданных томе/ролях/схеме идемпотентен (проверено в Docker, два прогона шагов подряд). Остальное: `JWT_SECRET` убран из env db, демо JWT/`local-storage-*` отбрасываются, права anon/authenticated на таблицы storage выдают миграции storage-api. Сервер и update.sh целиком не проверялись.
