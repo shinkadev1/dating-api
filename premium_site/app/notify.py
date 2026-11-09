@@ -39,7 +39,7 @@ def redis_client():
     if not url: return None
     if _redis is None:
         import redis
-        _redis = redis.Redis.from_url(url, socket_timeout=5, socket_connect_timeout=5)
+        _redis = redis.Redis.from_url(url, socket_timeout=2, socket_connect_timeout=2)
     return _redis
 
 
@@ -75,9 +75,9 @@ def drain(client=None, limit=50):
     return sent
 
 
-def drain_quietly():
+def drain_quietly(limit=50):
     """Сбой Redis не должен ломать оплату: уведомление останется в очереди до следующего раза."""
-    try: return drain()
+    try: return drain(limit=limit)
     except Exception as exc:
         logging.warning('Premium notice not sent yet: %s', type(exc).__name__)
         return 0

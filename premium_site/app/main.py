@@ -249,7 +249,7 @@ def refresh(request:Request,order_id:UUID,csrf:str=Form()):
     error=None
     try: billing.process(order_id)
     except HTTPException as exc: error=str(exc.detail)
-    notify.drain_quietly()
+    notify.drain_quietly(limit=5)
     return order_view(request,get_order(request,order_id),error)
 
 @app.post('/orders/{order_id}/stop-renewal')
@@ -301,5 +301,5 @@ def webhook(request:Request,body:Notification):
     try: payment_id=UUID(str(body.object.get('id')))
     except ValueError: raise HTTPException(422,'Некорректный платёж')
     billing.webhook(str(payment_id))
-    notify.drain_quietly()
+    notify.drain_quietly(limit=5)
     return {'ok':True}
