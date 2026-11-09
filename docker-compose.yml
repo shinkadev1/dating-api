@@ -1,4 +1,4 @@
-# Chat API, мост к chat-engine, Redis, база Supabase Postgres и панель Studio.
+# Chat API, Supabase Storage (медиа), мост к chat-engine, Redis, база Supabase Postgres и панель Studio.
 # Бот ВК — репозиторий dating-bot-vk, бот Telegram — dating-bot-tg.
 # Локально: docker compose up --build
 # Локально мост: COMPOSE_PROFILES=engine docker compose up --build
@@ -73,11 +73,13 @@ services:
       CHAT_API_TG_TOKEN: ${CHAT_API_TG_TOKEN:-}
       ENGINE_FALLBACK_AFTER_SECONDS: ${ENGINE_FALLBACK_AFTER_SECONDS:-0}
       STATS_ONLINE_WINDOW_SECONDS: ${STATS_ONLINE_WINDOW_SECONDS:-300}
-      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
-      S3_REGION: ${S3_REGION:-ru1}
-      S3_BUCKET: ${S3_BUCKET:-}
-      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
-      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+      # Медиа лежат в Supabase Storage (S3-протокол, бакет chat-media). Для отката на Beget
+      # задайте MEDIA_S3_* в .env сервера (см. README). S3_* ниже в compose — только источник миграции.
+      S3_ENDPOINT_URL: ${MEDIA_S3_ENDPOINT_URL:-http://storage:5000/s3}
+      S3_REGION: ${MEDIA_S3_REGION:-local}
+      S3_BUCKET: ${MEDIA_S3_BUCKET:-chat-media}
+      S3_ACCESS_KEY: ${MEDIA_S3_ACCESS_KEY:-${STORAGE_S3_ACCESS_KEY_ID:-}}
+      S3_SECRET_KEY: ${MEDIA_S3_SECRET_KEY:-${STORAGE_S3_SECRET_KEY:-}}
       # Подпись ссылок на оплату премиума; тот же секрет у premium_site. Без него /premium/link — 503.
       PREMIUM_LINK_SECRET: ${PREMIUM_LINK_SECRET:-}
       PAY_PUBLIC_URL: ${PAY_PUBLIC_URL:-https://pay.chatwithyou.site}
@@ -85,6 +87,8 @@ services:
       db:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      storage:
         condition: service_healthy
     healthcheck:
       test:
@@ -118,6 +122,80 @@ services:
       redis:
         condition: service_healthy
 
+  # Supabase Storage: S3-протокол для Chat API и файлы в Studio → Storage. Файловый бэкенд на томе storage_data.
+  # Порты наружу не публикуются. Версия — из docker/docker-compose.yml supabase/supabase на ревизии со studio 2026.09.07.
+  storage:
+    image: supabase/storage-api:v1.74.0
+    container_name: vk-bot-storage
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://supabase_admin:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-postgres}
+      AUTH_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      PGRST_JWT_SECRET: ${JWT_SECRET:-super-secret-jwt-token-with-at-least-32-characters-long}
+      ANON_KEY: ${ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE}
+      SERVICE_KEY: ${SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q}
+      # PostgREST в стеке нет: адрес нужен только для проверки конфигурации, запросов к нему Chat API и Studio не делают.
+      POSTGREST_URL: http://127.0.0.1:3000
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      FILE_SIZE_LIMIT: 115343360
+      TENANT_ID: stub
+      REGION: local
+      GLOBAL_S3_BUCKET: stub
+      ENABLE_IMAGE_TRANSFORMATION: "false"
+      S3_PROTOCOL_ACCESS_KEY_ID: ${STORAGE_S3_ACCESS_KEY_ID:-}
+      S3_PROTOCOL_ACCESS_KEY_SECRET: ${STORAGE_S3_SECRET_KEY:-}
+    volumes:
+      - storage_data:/var/lib/storage
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:5000/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  # Шлюз /storage/v1/* → storage:5000 для Studio (в роли Kong из официального Supabase).
+  storage-gw:
+    image: nginx:1.27-alpine
+    container_name: vk-bot-storage-gw
+    restart: unless-stopped
+    depends_on:
+      storage:
+        condition: service_healthy
+    volumes:
+      - ./supabase/gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Разовый перенос медиа из S3 Beget (src) в Supabase Storage (dst). deploy/update.sh запускает его сам.
+  # Локально бакет создаётся так: docker compose --profile migrate run --rm media-migrate mkdir dst:chat-media
+  media-migrate:
+    image: rclone/rclone:1.69.1
+    profiles: ["migrate"]
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      RCLONE_CONFIG_SRC_TYPE: s3
+      RCLONE_CONFIG_SRC_PROVIDER: Other
+      RCLONE_CONFIG_SRC_ENDPOINT: ${S3_ENDPOINT_URL:-}
+      RCLONE_CONFIG_SRC_REGION: ${S3_REGION:-ru1}
+      RCLONE_CONFIG_SRC_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-}
+      RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-}
+      RCLONE_CONFIG_DST_TYPE: s3
+      RCLONE_CONFIG_DST_PROVIDER: Other
+      RCLONE_CONFIG_DST_ENDPOINT: http://storage:5000/s3
+      RCLONE_CONFIG_DST_REGION: local
+      RCLONE_CONFIG_DST_FORCE_PATH_STYLE: "true"
+      RCLONE_CONFIG_DST_ACCESS_KEY_ID: ${STORAGE_S3_ACCESS_KEY_ID:-}
+      RCLONE_CONFIG_DST_SECRET_ACCESS_KEY: ${STORAGE_S3_SECRET_KEY:-}
+
   meta:
     image: supabase/postgres-meta:v0.99.0
     container_name: vk-bot-meta
@@ -143,6 +221,8 @@ services:
     depends_on:
       meta:
         condition: service_started
+      storage-gw:
+        condition: service_started
     environment:
       HOSTNAME: "0.0.0.0"
       STUDIO_PG_META_URL: http://meta:8080
@@ -154,7 +234,8 @@ services:
       PG_META_CRYPTO_KEY: ${PG_META_CRYPTO_KEY:-local-studio-crypto-key-32-characters}
       DEFAULT_ORGANIZATION_NAME: ${STUDIO_DEFAULT_ORGANIZATION:-VK Bot}
       DEFAULT_PROJECT_NAME: ${STUDIO_DEFAULT_PROJECT:-vk-bot}
-      SUPABASE_URL: ${STUDIO_PUBLIC_URL:-http://127.0.0.1:54323}
+      # Storage API Studio видит через внутренний шлюз (/storage/v1/*), публичный адрес не меняется.
+      SUPABASE_URL: http://storage-gw:8000
       SUPABASE_PUBLIC_URL: ${STUDIO_PUBLIC_URL:-http://127.0.0.1:54323}
       SUPABASE_ANON_KEY: ${ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJhbm9uIiwKICAgICJpc3MiOiAic3VwYWJhc2UtZGVtbyIsCiAgICAiaWF0IjogMTY0MTc2OTIwMCwKICAgICJleHAiOiAxNzk5NTM1NjAwCn0.dc_X5iR_VP_qT0zsiyj_I_OZ2T9FtRU2BBNWN8Bu4GE}
       SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyAgCiAgICAicm9sZSI6ICJzZXJ2aWNlX3JvbGUiLAogICAgImlzcyI6ICJzdXBhYmFzZS1kZW1vIiwKICAgICJpYXQiOiAxNjQxNzY5MjAwLAogICAgImV4cCI6IDE3OTk1MzU2MDAKfQ.DaYlNEoUrrEn2Ig7tqibS-PHK5vgusbcbo7X36XVt4Q}
@@ -183,3 +264,4 @@ services:
 volumes:
   supabase_data:
   redis_data:
+  storage_data:
