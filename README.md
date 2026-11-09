@@ -55,13 +55,48 @@ Chat API публикует событие `demand` в `chat:events:engine`, `en
 
 В активном диалоге бот забирает у человека фото, видео, кружок или голосовое и вызывает
 `POST /api/v1/peers/{platform}/{bot_key}/{user_id}/media` (`multipart`: поле `kind` и файл `file`).
-Chat API проверяет байты, кладёт объект в S3 и пишет ключ в `stored_media`.
+Chat API проверяет байты, кладёт объект в Supabase Storage (бакет `chat-media`) и пишет ключ в `stored_media`.
 Собеседнику файл этим запросом не отправляется.
 
 `kind`: `photo`, `video`, `video_note` (кружок), `voice`.
 Пределы: фото и голосовое 20 МБ, кружок 32 МБ, видео 100 МБ.
-Ключи бакета — `S3_ENDPOINT_URL`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`.
-На сервере их нужно добавить в секрет `ENV_FILE`. Без них API стартует, а загрузка отвечает 503.
+
+### Хранилище медиа
+
+Медиа лежат в self-hosted Supabase Storage (`storage-api`, файловый бэкенд на томе `storage_data`) на том же сервере.
+Chat API ходит в него по S3-протоколу (`http://storage:5000/s3`, path-style, регион `local`); ключи объектов
+остаются прежними. Файлы видны в Studio → Storage → Files, бакет `chat-media`. Порты storage наружу не публикуются;
+Studio обращается к нему через внутренний шлюз `storage-gw` (`/storage/v1/*`).
+
+Переменные: `STORAGE_S3_ACCESS_KEY_ID`, `STORAGE_S3_SECRET_KEY` (на сервере их создаёт `deploy/update.sh`),
+`JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY` (на сервере выпускаются, если там демо-значения). Локально бакет создаётся так:
+`docker compose --profile migrate run --rm media-migrate mkdir dst:chat-media`.
+
+Порядок деплоя (`deploy/update.sh`):
+
+1. `db` и `redis`, диагностика ролей и схем, `supabase/init/003_storage_roles.sql`, затем `storage` и `storage-gw`.
+2. Бакет `chat-media`. Если в `.env` есть ключи Beget (`S3_*`) и не задан `MEDIA_S3_ENDPOINT_URL`, на КАЖДОМ деплое
+   выполняется `rclone copy --size-only` из Beget в `chat-media` (проход 1). Пока нет файла `.media-migrated`
+   (первый перенос), перед этим проверяется свободное место: нужно 1,5 × размер бакета + 1 ГиБ, иначе деплой
+   останавливается до переключения chat-api. На Beget ничего не меняется и не удаляется.
+3. Пересоздаётся `chat-api`; проход 2 `rclone copy` и `rclone check --size-only --one-way`. При расхождениях
+   деплой падает; при нуле расхождений создаётся `.media-migrated` (он лишь пропускает проверку места).
+4. SMOKE: контейнеры healthy, put/get/delete из chat-api, `GET /storage/v1/bucket` из Studio через шлюз,
+   размеры бакетов и `count/sum(size_bytes)` по `stored_media` в логе.
+
+Секреты: `JWT_SECRET` берётся из `.env` сервера; демо-значение (в том числе из `ENV_FILE`) игнорируется и заменяется
+сгенерированным один раз, вместе с `ANON_KEY` и `SERVICE_ROLE_KEY`. Значения `local-storage-*` из `.env.example`
+для `STORAGE_S3_*` на сервере отбрасываются. `JWT_SECRET` больше не передаётся контейнеру `db` (его init-скрипты
+перекрыты, на базу он не влиял), поэтому его смена не пересоздаёт Postgres. Единственный перезапуск `db` на
+первом деплое этой версии связан с удалением этой переменной из окружения контейнера.
+
+Откат на Beget: в `.env` на сервере задать `MEDIA_S3_ENDPOINT_URL`, `MEDIA_S3_REGION`, `MEDIA_S3_BUCKET`,
+`MEDIA_S3_ACCESS_KEY`, `MEDIA_S3_SECRET_KEY` (значения Beget) и выполнить `docker compose up -d --force-recreate chat-api`;
+объекты Beget не удалялись. Пока `MEDIA_S3_ENDPOINT_URL` задан, деплой не копирует Beget → `chat-media`. Новые объекты
+остаются в Beget; после возврата (удалить `MEDIA_S3_*` из `.env` и задеплоить) следующий деплой докопирует их в
+`chat-media` автоматически. Объекты, записанные в `chat-media` до отката, в Beget не возвращаются
+(`rclone copy dst:chat-media src:<бакет>`, если нужно).
+Без ключей Chat API загрузка медиа отвечает 503.
 
 ## Структура
 

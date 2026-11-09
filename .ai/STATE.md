@@ -1,5 +1,9 @@
 # Состояние vk-bot
 
+## Ветка loop/supabase-storage-media, 2026-11-09
+
+Медиа Chat API переезжают из S3 Beget в self-hosted Supabase Storage (`supabase/storage-api:v1.74.0`, S3-протокол, файловый бэкенд на томе `storage_data`). Изменены `docker-compose.yml` (сервисы `storage`, `storage-gw`, `media-migrate`; chat-api и studio переключены), `deploy/update.sh`, `supabase/init/003_storage_roles.sql`, `supabase/gateway/nginx.conf`, `.env.example`, README, `.ai/`. Код `chat_api/` не менялся. Проверены статически: `docker compose config`, `sh -n`/`bash -n`, генерация JWT. Интеграционный прогон в Docker (проект storage-check, свежий том): storage-api v1.74.0 стартует под `supabase_admin` с заглушкой `POSTGREST_URL`, rclone mkdir/copy/check и aioboto3 put/get/delete работают, Studio видит `chat-media` через `storage-gw`. Для этого в 003_storage_roles.sql добавлены роль `postgres` и права на схему storage, а демо-ключи ANON/SERVICE в compose пересчитаны (прежние не сходились с демо JWT_SECRET). После ревью: докопирование Beget → chat-media на каждом деплое, JWT_SECRET убран из env db, демо JWT_SECRET/local-storage-* отбрасываются. Блоки секретов update.sh проверены изолированно (повторный запуск не меняет .env). Права anon/authenticated на таблицы storage выдают сами миграции storage-api (как в официальном Supabase), 003 их не расширяет. Сервер и боевой деплой, update.sh целиком не проверялись.
+
 ## Ветка loop/payments-complete, 2026-11-04
 
 Worktree `.worktrees/vk-bot-payments-complete`, от `payments` 5c0e1c1. Изменены только `premium_site/` (billing, main, identity, шаблоны, payment.css, тесты), `.env.example`, `premium_site/DEPLOY.md`, `.ai/`. База тестов: 38 passed; после изменений pytest premium_site на Postgres (pgserver): 57 passed, 0 skipped. Схема БД не менялась. Тесты с реальным тестовым магазином ЮKassa не запускались (нет ключей); отказ/неопределённый исход проверены на подставном провайдере и на мок-ответах httpx.
