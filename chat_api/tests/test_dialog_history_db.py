@@ -6,7 +6,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import sys
 import unittest
 from datetime import UTC, date, datetime, timedelta
 
@@ -16,6 +18,10 @@ from app.repositories import messages as messages_repo
 from app.repositories import sessions as repo
 
 DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+
+if sys.platform == "win32":
+    # psycopg async не работает на ProactorEventLoop.
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 A = Peer("vk", "club1", 11)
 B = Peer("tg", "bot", 22)
