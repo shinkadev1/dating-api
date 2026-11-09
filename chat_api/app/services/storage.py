@@ -124,6 +124,17 @@ class ObjectStorage:
             logger.exception("S3 не отдал %s", key)
             raise StorageError(key) from exc
 
+    async def head(self, key: str) -> int:
+        """Размер объекта в байтах (ContentLength). Нет объекта или хранилище выключено — StorageError."""
+        if not self.enabled or self._bucket is None:
+            raise StorageError("Хранилище не настроено")
+        try:
+            response = await self._client.head_object(Bucket=self._bucket, Key=key)
+            return int(response["ContentLength"])
+        except Exception as exc:
+            logger.exception("S3 не вернул заголовки %s", key)
+            raise StorageError(key) from exc
+
     async def delete(self, key: str) -> None:
         if not self.enabled or self._bucket is None:
             return

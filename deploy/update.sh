@@ -498,5 +498,6 @@ done
 size_out=$(timeout 120 docker compose --profile migrate run --rm -T media-migrate size --json dst:chat-media 2>&1) || size_out="не удалось прочитать: $(printf '%s' "$size_out" | tail -n 3)"
 echo "chat-media: $(printf "%s" "$size_out" | grep "^{" || printf "%s" "$size_out" | tail -n 3)"
 echo "stored_media (записей|байт): $(timeout 60 docker compose exec -T db psql -U supabase_admin -d "$pgdb" -Atc 'SELECT count(*), COALESCE(sum(size_bytes), 0) FROM stored_media' || echo 'не удалось прочитать')"
+echo "история (диалоги|открыто|сообщения|части архива): $(timeout 60 docker compose exec -T db psql -U supabase_admin -d "$pgdb" -Atc 'SELECT (SELECT count(*) FROM dialogs), (SELECT count(*) FROM dialogs WHERE ended_at IS NULL), (SELECT count(*) FROM messages), (SELECT count(*) FROM message_archives)' || echo 'не удалось прочитать')"
 
 docker image prune -af

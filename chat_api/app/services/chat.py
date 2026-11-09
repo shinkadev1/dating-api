@@ -15,6 +15,7 @@ from psycopg_pool import AsyncConnectionPool
 from app.config import Settings
 from app.events import EventBus
 from app.peer import Peer
+from app.repositories import messages as messages_repo
 from app.repositories import sessions as repo
 from app.repositories.visitors import save_web_visitor
 from app.schemas import (
@@ -81,6 +82,16 @@ class ChatService:
             return None
         return session.partner
 
+    async def _record(self, dialog_id: int | None, peer: Peer, partner: Peer | None, **fields: object) -> None:
+        """Пишет реплику в историю. Сбой не меняет ответ клиенту и не раскрывает содержимое в логе."""
+        if dialog_id is None:
+            return
+        try:
+            async with self._pool.connection() as conn:
+                await messages_repo.insert_message(conn, dialog_id=dialog_id, sender=peer, partner=partner, **fields)  # type: ignore[arg-type]
+        except Exception as exc:
+            logger.warning("Не записал сообщение в диалог %s: %s", dialog_id, type(exc).__name__)
+
     async def _notify_left(
         self,
         conn: AsyncConnection,
@@ -97,10 +108,10 @@ class ChatService:
             if session is not None and session.partner is not None and session.partner != skip
             else None
         )
-        await repo.set_idle(conn, other)
+        await repo.set_idle(conn, other, reason=reason, ended_by=skip)
         outbox.append((other, ChatEvent(type="partner_left", reason=reason)))
         if extra is not None:
-            await repo.set_idle(conn, extra)
+            await repo.set_idle(conn, extra, reason=reason, ended_by=skip)
             outbox.append((extra, ChatEvent(type="partner_left", reason=reason)))
 
     async def _detach(self, conn: AsyncConnection, peer: Peer, reason: LeftReason, outbox: Outbox) -> bool:
@@ -113,7 +124,7 @@ class ChatService:
         if session is None or session.phase == "idle":
             return False
         partner = session.partner if session.phase == "chatting" else None
-        await repo.set_idle(conn, peer)
+        await repo.set_idle(conn, peer, reason=reason, ended_by=peer)
         if partner is not None:
             await self._notify_left(conn, partner, reason, outbox, skip=peer)
         return True
@@ -131,12 +142,13 @@ class ChatService:
                 paired = await repo.find_human_with_engine(conn)
                 if paired is not None:
                     other, engine = paired
-                    await repo.set_idle(conn, engine)
+                    await repo.set_idle(conn, engine, reason="stopped", ended_by=None)
                     outbox.append((engine, ChatEvent(type="partner_left", reason="stopped")))
                     stolen = True
             if other is not None:
-                await repo.set_chatting(conn, peer, other)
-                await repo.set_chatting(conn, other, peer)
+                dialog_id = await repo.open_dialog(conn, peer, other)
+                await repo.set_chatting(conn, peer, other, dialog_id)
+                await repo.set_chatting(conn, other, peer, dialog_id)
                 if not stolen:
                     outbox.append((other, ChatEvent(type="partner_found")))
                 phase = "chatting"
@@ -239,11 +251,13 @@ class ChatService:
             partner = await self._linked_partner(conn, peer, session)
         if partner is not None:
             await self._events.publish(partner, ChatEvent(type="message", text=text))
+            await self._record(session.dialog_id, peer, partner, kind="text", status="delivered", text=text)
             return MessageOut(delivered=True, phase="chatting")
         outbox: Outbox = []
         async with self._locked() as conn:
             await self._detach(conn, peer, "stopped", outbox)
         await self._flush(outbox)
+        await self._record(session.dialog_id, peer, session.partner, kind="text", status="left", text=text)
         return MessageOut(delivered=False, phase="idle")
 
     async def forward_media(
@@ -261,6 +275,13 @@ class ChatService:
         `sent` — событие опубликовано. `left` — пары уже нет, диалог закрыт.
         `skipped` — байтов нет, а file_id Telegram собеседнику на другой платформе нечего отдать.
         """
+        fields = {
+            "kind": "audio" if tg_method == "audio" else kind,
+            "media_id": media_id,
+            "tg_file_id": tg_file_id,
+            "tg_method": tg_method,
+            "content_type": content_type,
+        }
         async with self._pool.connection() as conn:
             session = await repo.get_session(conn, peer)
             if session is None or session.phase != "chatting":
@@ -271,6 +292,7 @@ class ChatService:
             async with self._locked() as conn:
                 await self._detach(conn, peer, "stopped", outbox)
             await self._flush(outbox)
+            await self._record(session.dialog_id, peer, session.partner, status="left", **fields)
             return "left"
         if media_id is None and partner.platform != "tg":
             logger.info(
@@ -279,6 +301,7 @@ class ChatService:
                 partner.bot_key,
                 partner.user_id,
             )
+            await self._record(session.dialog_id, peer, partner, status="skipped", **fields)
             return "skipped"
         await self._events.publish(
             partner,
@@ -299,6 +322,7 @@ class ChatService:
             partner.bot_key,
             partner.user_id,
         )
+        await self._record(session.dialog_id, peer, partner, status="delivered", **fields)
         return "sent"
 
     async def delivery_failed(self, peer: Peer) -> None:
@@ -335,10 +359,11 @@ class ChatService:
                 return EngineAttachOut(attached=False, phase=session.phase if session else "idle")
             human = await repo.oldest_waiting_human(conn, self._fallback_after)
             if human is None:
-                await repo.set_idle(conn, engine)
+                await repo.set_idle(conn, engine, reason="stopped", ended_by=None)
                 return EngineAttachOut(attached=False, phase="idle")
-            await repo.set_chatting(conn, engine, human)
-            await repo.set_chatting(conn, human, engine)
+            dialog_id = await repo.open_dialog(conn, engine, human)
+            await repo.set_chatting(conn, engine, human, dialog_id)
+            await repo.set_chatting(conn, human, engine, dialog_id)
             outbox.append((human, ChatEvent(type="partner_found")))
         await self._flush(outbox)
         return EngineAttachOut(attached=True, phase="chatting")

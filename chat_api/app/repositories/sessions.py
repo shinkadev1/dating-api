@@ -17,6 +17,7 @@ _MATCHMAKING_LOCK = 7_310_002
 class SessionRow:
     phase: str
     partner: Peer | None
+    dialog_id: int | None = None
 
 
 def _key(peer: Peer) -> dict[str, Any]:
@@ -31,7 +32,7 @@ async def lock_matchmaking(conn: AsyncConnection) -> None:
 async def get_session(conn: AsyncConnection, peer: Peer) -> SessionRow | None:
     cursor = await conn.execute(
         """
-        SELECT phase, partner_id, partner_platform, partner_bot_key
+        SELECT phase, partner_id, partner_platform, partner_bot_key, dialog_id
         FROM chat_sessions
         WHERE platform = %(platform)s AND bot_key = %(bot_key)s AND user_id = %(user_id)s
         """,
@@ -47,15 +48,74 @@ async def get_session(conn: AsyncConnection, peer: Peer) -> SessionRow | None:
             row["partner_bot_key"] or "",
             int(row["partner_id"]),
         )
-    return SessionRow(phase=row["phase"], partner=partner)
+    return SessionRow(phase=row["phase"], partner=partner, dialog_id=row["dialog_id"])
 
 
-async def set_idle(conn: AsyncConnection, peer: Peer) -> None:
+async def open_dialog(conn: AsyncConnection, a: Peer, b: Peer) -> int:
+    """Новый диалог пары в истории. a — инициатор (искавший), b — второй участник."""
+    cursor = await conn.execute(
+        """
+        INSERT INTO dialogs (a_platform, a_bot_key, a_user_id, b_platform, b_bot_key, b_user_id)
+        VALUES (%(a_platform)s, %(a_bot_key)s, %(a_user_id)s, %(b_platform)s, %(b_bot_key)s, %(b_user_id)s)
+        RETURNING id
+        """,
+        {
+            "a_platform": a.platform,
+            "a_bot_key": a.bot_key,
+            "a_user_id": a.user_id,
+            "b_platform": b.platform,
+            "b_bot_key": b.bot_key,
+            "b_user_id": b.user_id,
+        },
+    )
+    row = await cursor.fetchone()
+    return int(row["id"])
+
+
+async def _close_open_dialog(
+    conn: AsyncConnection,
+    peer: Peer,
+    reason: str,
+    ended_by: Peer | None,
+) -> None:
+    """Закрывает открытый диалог сессии peer. Уже закрытый не перезаписывается.
+
+    ended_by — кто закончил диалог; None — закрыл сервис (NULL в ended_by).
+    """
+    await conn.execute(
+        """
+        UPDATE dialogs AS d
+        SET ended_at = NOW(),
+            end_reason = %(reason)s,
+            ended_by = CASE
+                WHEN %(by_platform)s::text IS NULL THEN NULL
+                WHEN d.a_platform = %(by_platform)s::text AND d.a_bot_key = %(by_bot_key)s::text
+                     AND d.a_user_id = %(by_user_id)s::bigint THEN 'a'
+                WHEN d.b_platform = %(by_platform)s::text AND d.b_bot_key = %(by_bot_key)s::text
+                     AND d.b_user_id = %(by_user_id)s::bigint THEN 'b'
+            END
+        FROM chat_sessions AS s
+        WHERE s.platform = %(platform)s AND s.bot_key = %(bot_key)s AND s.user_id = %(user_id)s
+          AND d.id = s.dialog_id AND d.ended_at IS NULL
+        """,
+        {
+            **_key(peer),
+            "reason": reason,
+            "by_platform": ended_by.platform if ended_by else None,
+            "by_bot_key": ended_by.bot_key if ended_by else None,
+            "by_user_id": ended_by.user_id if ended_by else None,
+        },
+    )
+
+
+async def set_idle(conn: AsyncConnection, peer: Peer, *, reason: str, ended_by: Peer | None) -> None:
+    """Снимает сессию в idle и закрывает её открытый диалог с причиной reason."""
+    await _close_open_dialog(conn, peer, reason, ended_by)
     await conn.execute(
         """
         UPDATE chat_sessions
         SET phase = 'idle', partner_id = NULL, partner_platform = NULL, partner_bot_key = NULL,
-            searching_since = NULL, updated_at = NOW()
+            dialog_id = NULL, searching_since = NULL, updated_at = NOW()
         WHERE platform = %(platform)s AND bot_key = %(bot_key)s AND user_id = %(user_id)s
         """,
         _key(peer),
@@ -63,6 +123,7 @@ async def set_idle(conn: AsyncConnection, peer: Peer) -> None:
 
 
 async def set_searching(conn: AsyncConnection, peer: Peer) -> None:
+    await _close_open_dialog(conn, peer, "stopped", None)
     await conn.execute(
         """
         INSERT INTO chat_sessions (platform, bot_key, user_id, phase, searching_since)
@@ -72,6 +133,7 @@ async def set_searching(conn: AsyncConnection, peer: Peer) -> None:
             partner_id = NULL,
             partner_platform = NULL,
             partner_bot_key = NULL,
+            dialog_id = NULL,
             searching_since = NOW(),
             updated_at = NOW()
         """,
@@ -79,13 +141,13 @@ async def set_searching(conn: AsyncConnection, peer: Peer) -> None:
     )
 
 
-async def set_chatting(conn: AsyncConnection, peer: Peer, partner: Peer) -> None:
+async def set_chatting(conn: AsyncConnection, peer: Peer, partner: Peer, dialog_id: int) -> None:
     await conn.execute(
         """
         UPDATE chat_sessions
         SET phase = 'chatting', partner_id = %(partner_id)s,
             partner_platform = %(partner_platform)s, partner_bot_key = %(partner_bot_key)s,
-            searching_since = NULL, updated_at = NOW()
+            dialog_id = %(dialog_id)s, searching_since = NULL, updated_at = NOW()
         WHERE platform = %(platform)s AND bot_key = %(bot_key)s AND user_id = %(user_id)s
         """,
         {
@@ -93,6 +155,7 @@ async def set_chatting(conn: AsyncConnection, peer: Peer, partner: Peer) -> None
             "partner_id": partner.user_id,
             "partner_platform": partner.platform,
             "partner_bot_key": partner.bot_key,
+            "dialog_id": dialog_id,
         },
     )
 

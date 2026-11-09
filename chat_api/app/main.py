@@ -15,6 +15,7 @@ from app.config import get_settings
 from app.db import create_pool, ensure_schema
 from app.events import REDIS_SOCKET_TIMEOUT, EventBus, WebSocketHub
 from app.routers import channels, engine, media, peers, stats, visitors, ws
+from app.services.archive import MessageArchiver
 from app.services.chat import ChatService
 from app.services.media import MediaService
 from app.services.storage import ObjectStorage
@@ -50,9 +51,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.hub = hub
     app.state.pool = pool
     app.state.redis = redis
+    archive_task: asyncio.Task[None] | None = None
+    if settings.messages_archive_enabled:
+        archiver = MessageArchiver(pool, storage, hot_days=settings.messages_hot_days)
+        archive_task = asyncio.create_task(archiver.run_forever(), name="messages-archive")
     try:
         yield
     finally:
+        if archive_task is not None:
+            archive_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await archive_task
         hub_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await hub_task

@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     s3_access_key: str | None = None
     s3_secret_key: str | None = None
 
+    # Сколько дней реплики лежат в базе; старше выгружаются в S3 (archive/messages/) и удаляются.
+    messages_hot_days: int = Field(90, ge=1)
+    # Ежесуточная выгрузка старых реплик. Без S3 она ничего не делает.
+    messages_archive_enabled: bool = True
+
     # Ссылка на оплату премиума. Тот же секрет задан у premium_site.
     # Без секрета маршрут .../premium/link отвечает 503.
     premium_link_secret: str | None = Field(None, min_length=32)

@@ -36,6 +36,9 @@ jobs:
             docker logs vk-bot-cloudflared --tail 60 2>&1 || true
             echo '--- CHAT API ---'
             docker logs vk-chat-api --tail 60 2>&1 || true
+            echo '--- DIALOG HISTORY ---'
+            docker exec vk-bot-db psql -U supabase_admin -Atc 'SELECT (SELECT count(*) FROM dialogs), (SELECT count(*) FROM dialogs WHERE ended_at IS NULL), (SELECT count(*) FROM messages), (SELECT count(*) FROM message_archives)' 2>&1 || true
+            docker logs vk-chat-api --since 24h 2>&1 | grep -E "Не записал сообщение|Архив сообщений" | tail -n 20 || true
             echo '--- ENGINE BRIDGE ---'
             docker logs vk-engine-bridge --tail 80 2>&1 || true
             echo '--- LOGS ---'

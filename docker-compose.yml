@@ -77,6 +77,9 @@ services:
       S3_BUCKET: ${MEDIA_S3_BUCKET:-chat-media}
       S3_ACCESS_KEY: ${MEDIA_S3_ACCESS_KEY:-${STORAGE_S3_ACCESS_KEY_ID:-}}
       S3_SECRET_KEY: ${MEDIA_S3_SECRET_KEY:-${STORAGE_S3_SECRET_KEY:-}}
+      # История диалогов: реплики старше MESSAGES_HOT_DAYS выгружаются в S3 (archive/messages/) раз в сутки.
+      MESSAGES_HOT_DAYS: ${MESSAGES_HOT_DAYS:-90}
+      MESSAGES_ARCHIVE_ENABLED: ${MESSAGES_ARCHIVE_ENABLED:-true}
       # Подпись ссылок на оплату премиума; тот же секрет у premium_site. Без него /premium/link — 503.
       PREMIUM_LINK_SECRET: ${PREMIUM_LINK_SECRET:-}
       PAY_PUBLIC_URL: ${PAY_PUBLIC_URL:-https://pay.chatwithyou.site}
