@@ -142,8 +142,23 @@ else
 fi
 
 # Supabase Storage: ключи S3-протокола знают только сервер (Chat API и rclone) и storage-api.
-ensure_secret STORAGE_S3_ACCESS_KEY_ID
-ensure_secret STORAGE_S3_SECRET_KEY
+# Образцовые значения local-storage-* из .env.example на сервер не попадают: вместо них генерируется случайный ключ.
+ensure_storage_secret() {
+  key=$1
+  value=$(secret_value "$key")
+  case $value in local-storage-*) value="" ;; esac
+  if [ -z "$value" ]; then
+    value=$(sed -n "s/^${key}=//p" .env | tail -n 1)
+    case $value in local-storage-*) value="" ;; esac
+  fi
+  if [ -z "$value" ]; then
+    value=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    echo "Сгенерирован ${key}."
+  fi
+  set_env "$key" "$value"
+}
+ensure_storage_secret STORAGE_S3_ACCESS_KEY_ID
+ensure_storage_secret STORAGE_S3_SECRET_KEY
 
 # JWT_SECRET, ANON_KEY и SERVICE_ROLE_KEY нужны Storage и Studio. Демо-значения Supabase публичны,
 # поэтому на сервере выпускаем свои. Без openssl оставляем всё как есть: менять секрет без подписи ключей нельзя.
@@ -163,7 +178,13 @@ make_jwt() {
 }
 
 if command -v openssl >/dev/null 2>&1; then
+  # Демо-секрет из ENV_FILE (копия .env.example) считается незаданным: берём секрет из .env сервера,
+  # иначе на каждом деплое выпускался бы новый и ключи менялись бы.
   jwt_secret=$(deploy_value JWT_SECRET)
+  if [ "$jwt_secret" = "$DEMO_JWT_SECRET" ]; then
+    echo "JWT_SECRET в ENV_FILE — демо-значение, игнорируется: уберите его из ENV_FILE."
+    jwt_secret=""
+  fi
   if [ -z "$jwt_secret" ]; then
     jwt_secret=$(env_value JWT_SECRET)
   fi
@@ -314,6 +335,8 @@ if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
 fi
 
 docker compose pull
+# rclone нужен деплою до конца (перенос и проверка), а образ профиля migrate обычным pull не скачивается.
+docker compose --profile migrate pull media-migrate
 docker logout >/dev/null 2>&1 || true
 docker compose up -d --no-build --wait db redis
 
@@ -361,28 +384,35 @@ if [ -n "$(env_value S3_ACCESS_KEY)" ] && [ -n "$(env_value S3_SECRET_KEY)" ] &&
 else
   has_beget=0
 fi
+# MEDIA_S3_ENDPOINT_URL в .env сервера = ручной откат: Chat API пишет в Beget, копировать в chat-media нечего.
+if [ -n "$(env_value MEDIA_S3_ENDPOINT_URL)" ]; then
+  echo "Задан MEDIA_S3_ENDPOINT_URL: Chat API работает с внешним хранилищем, перенос из Beget пропущен."
+  has_beget=0
+fi
 
 rclone_mkdir_bucket || fail "Не удалось создать бакет chat-media в Supabase Storage."
-if [ "$has_beget" -eq 1 ] && [ ! -f .media-migrated ]; then
+if [ "$has_beget" -eq 1 ]; then
+  # Докопирование на каждом деплое: после отката на Beget там появляются новые объекты, которых нет в chat-media.
   migrate_media=1
-  src_json=$(rclone_run size --json "src:${beget_bucket}" 2>/dev/null) || fail "Не удалось измерить бакет Beget."
-  src_bytes=$(rclone_bytes "$src_json")
-  [ -n "$src_bytes" ] || fail "Не удалось прочитать размер бакета Beget."
-  avail_kb=$(df -Pk "${docker_root:-/var/lib/docker}" 2>/dev/null | awk 'NR==2 {print $4}')
-  if [ -z "$avail_kb" ]; then
-    avail_kb=$(df -Pk / | awk 'NR==2 {print $4}')
+  if [ ! -f .media-migrated ]; then
+    # Место проверяем только до первого полного переноса.
+    src_json=$(rclone_run size --json "src:${beget_bucket}" 2>/dev/null) || fail "Не удалось измерить бакет Beget."
+    src_bytes=$(rclone_bytes "$src_json")
+    [ -n "$src_bytes" ] || fail "Не удалось прочитать размер бакета Beget."
+    avail_kb=$(df -Pk "${docker_root:-/var/lib/docker}" 2>/dev/null | awk 'NR==2 {print $4}')
+    if [ -z "$avail_kb" ]; then
+      avail_kb=$(df -Pk / | awk 'NR==2 {print $4}')
+    fi
+    need_bytes=$((src_bytes + src_bytes / 2 + 1073741824))
+    echo "Медиа в Beget: ${src_bytes} байт; нужно места не меньше ${need_bytes}, свободно $((avail_kb * 1024))."
+    if [ $((avail_kb * 1024)) -lt "$need_bytes" ]; then
+      fail "Мало места для переноса медиа: chat-api не переключён, освободите диск."
+    fi
   fi
-  need_bytes=$((src_bytes + src_bytes / 2 + 1073741824))
-  echo "Медиа в Beget: ${src_bytes} байт; нужно места не меньше ${need_bytes}, свободно $((avail_kb * 1024))."
-  if [ $((avail_kb * 1024)) -lt "$need_bytes" ]; then
-    fail "Мало места для переноса медиа: chat-api не переключён, освободите диск."
-  fi
-  echo "Перенос медиа, проход 1 (Chat API пока на старом хранилище)."
+  echo "Перенос медиа, проход 1 (Chat API пока на прежнем хранилище)."
   rclone_run copy "src:${beget_bucket}" dst:chat-media --size-only --transfers 4 || fail "rclone copy (проход 1) завершился ошибкой."
-elif [ "$has_beget" -eq 1 ]; then
-  echo "Медиа уже перенесены (.media-migrated)."
 else
-  echo "Нет ключей Beget: переносить нечего."
+  echo "Перенос медиа из Beget не нужен."
 fi
 
 docker compose up -d --no-build --force-recreate chat-api
@@ -392,13 +422,16 @@ if [ "$migrate_media" -eq 1 ]; then
   rclone_run copy "src:${beget_bucket}" dst:chat-media --size-only --transfers 4 || fail "rclone copy (проход 2) завершился ошибкой."
   if check_out=$(rclone_run check "src:${beget_bucket}" dst:chat-media --size-only --one-way 2>&1) &&
      printf '%s' "$check_out" | grep -q "0 differences found"; then
+    # Маркер только пропускает проверку места; докопирование выполняется на каждом деплое.
     touch .media-migrated
-    echo "Проверка переноса: расхождений нет, создан .media-migrated."
+    echo "Проверка переноса: расхождений нет."
   else
-    printf '%s\n' "$check_out" | tail -n 30 >&2
+    printf '%s
+' "$check_out" | tail -n 30 >&2
     fail "После переноса медиа есть расхождения между Beget и chat-media."
   fi
 fi
+
 if [ -n "$optional_services" ]; then
   # shellcheck disable=SC2086 # список сервисов разделён пробелами
   docker compose up -d --no-build --force-recreate $optional_services
