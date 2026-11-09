@@ -338,7 +338,7 @@ docker compose pull
 # rclone создаёт бакет, а образ профиля migrate обычным pull не скачивается; нужен до docker logout.
 timeout 300 docker compose --profile migrate pull media-migrate
 docker logout >/dev/null 2>&1 || true
-docker compose up -d --no-build --wait --wait-timeout 180 db redis
+timeout 300 docker compose up -d --no-build --wait db redis
 
 pgdb=$(env_value POSTGRES_DB)
 pgdb=${pgdb:-postgres}
@@ -356,7 +356,7 @@ df -h "${docker_root:-/var/lib/docker}" 2>/dev/null || df -h / || true
 
 # Роли для миграций storage-api. Скрипт идемпотентен; chat-api прогоняет его же при старте.
 timeout 120 docker compose exec -T db psql -v ON_ERROR_STOP=1 -U supabase_admin -d "$pgdb" -f /docker-entrypoint-initdb.d/003_storage_roles.sql
-docker compose up -d --no-build --wait --wait-timeout 300 storage storage-gw
+timeout 420 docker compose up -d --no-build --wait storage storage-gw
 
 # Бакет chat-media создаём ДО переключения chat-api (идемпотентно; ошибка "уже существует" не фатальна).
 # Старые медиа из Beget не переносятся. Шаг ограничен по времени, вывод ошибки печатается.
