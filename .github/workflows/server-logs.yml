@@ -40,6 +40,18 @@ jobs:
             docker logs vk-engine-bridge --tail 80 2>&1 || true
             echo '--- LOGS ---'
             docker logs vk-bot --tail 200 2>&1 || true
+            echo '--- PREMIUM WEB ---'
+            docker logs vk-premium-web --tail 80 2>&1 | grep -v 'GET /health' || true
+            echo '--- PREMIUM SCHEDULER ---'
+            docker logs vk-premium-scheduler --tail 80 2>&1 || true
+            echo '--- PREMIUM STATE (read-only, no emails or full ids) ---'
+            docker exec vk-bot-db psql -U supabase_admin -h localhost -v ON_ERROR_STOP=0 -c "
+              SELECT left(o.id::text,8) id, o.plan_id, o.status, o.provider_status, o.payment_id IS NOT NULL has_payment,
+                     o.created_at, o.applied_at, a.premium_until, a.email IS NOT NULL has_email,
+                     (SELECT string_agg(i.platform||':'||right(i.user_id::text,4),',') FROM premium_identities i WHERE i.account_id=o.account_id) identities,
+                     (SELECT string_agg(b.platform||':'||right(b.user_id::text,4)||'='||coalesce(b.premium_until::text,'null'),',') FROM premium_identities i JOIN bot_users b ON b.platform=i.platform AND b.user_id=i.user_id WHERE i.account_id=o.account_id) bot_users
+              FROM premium_orders o LEFT JOIN premium_accounts a ON a.id=o.account_id ORDER BY o.created_at DESC LIMIT 8;" 2>&1 || true
+            docker exec vk-bot-db psql -U supabase_admin -h localhost -c "\d bot_users" 2>&1 | head -30 || true
 
   telegram-logs:
     runs-on: ubuntu-latest
