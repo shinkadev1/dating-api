@@ -2,7 +2,7 @@
 
 ## Ветка loop/dialog-history, 2026-11-10
 
-Worktree `.worktrees/vk-bot-dialog-history`, от origin/master 21a2a42. Добавлена история диалогов: `004_dialog_history.sql` (dialogs, messages, message_archives, chat_sessions.dialog_id), запись реплик в `ChatService`, суточный архиватор в S3 (`services/archive.py`, lock 7_310_003), настройки `MESSAGES_HOT_DAYS`/`MESSAGES_ARCHIVE_ENABLED`, счётчики в `deploy/update.sh` и `server-logs.yml`. Тесты без базы (`test_dialog_history.py`, `test_archive.py`) проходят вместе с прежними. Интеграционный `test_dialog_history_db.py` написан, но на момент записи не запускался на Postgres (в окружении нет Docker-демона и pgserver для Windows); до выкатки его нужно прогнать. Деплой не выполнялся.
+Worktree `.worktrees/vk-bot-dialog-history`, от origin/master 21a2a42. Добавлена история диалогов: `004_dialog_history.sql` (dialogs, messages, message_archives, chat_sessions.dialog_id), запись реплик в `ChatService`, суточный архиватор в S3 (`services/archive.py`, lock 7_310_003), настройки `MESSAGES_HOT_DAYS`/`MESSAGES_ARCHIVE_ENABLED`, счётчики в `deploy/update.sh` и `server-logs.yml`. Тесты без базы (`test_dialog_history.py`, `test_archive.py`) проходят вместе с прежними. Интеграционный `test_dialog_history_db.py` прогнан на временном Postgres 17 (Docker): весь набор chat_api — 55 passed, 0 skipped; повторный ensure_schema на непустой базе без ошибок, REVOKE снимает права anon/authenticated. На Windows тесту нужен селекторный цикл событий (задан в файле). Деплой не выполнялся.
 
 ## Ветка loop/supabase-storage-media, 2026-11-09 (повтор после отката)
 
