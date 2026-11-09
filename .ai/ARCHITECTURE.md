@@ -11,6 +11,7 @@ VK/TG → REST Chat API → ChatService → SQL/Redis → WebSocket клиент
 | Путь | Ответственность |
 | --- | --- |
 | `chat_api/app/main.py` | FastAPI, lifespan, подключения к Postgres/Redis/S3, `/health`. |
+| `chat_api/app/reminders/` | Напоминания давно не заходившим: `settings.py` (параметры, `ENABLED=False`), `content.py` (текст, фото `photo.jpg` необязательно), `service.py` (`ReminderService`, фоновая задача `reminders` в lifespan `main.py`). Раз в 15 мин выбирает `user_channels` через `repositories/reminders.py` и кладёт notice в `chat:broadcast:<platform>` через `publish_notices`. Журнал — `reminder_log`; выбор и запись журнала в одной транзакции с постановкой в очередь; проход под advisory-lock `7_310_003`. Включается только правкой `settings.ENABLED` и деплоем, не `.env`. |
 | `chat_api/app/routers/` | REST/WS: peers, engine, channels, media, visitors, stats, ws. |
 | `chat_api/app/services/chat.py` | Поиск, остановка, жалобы, создание пары и пересылка. |
 | `chat_api/app/repositories/` | SQL для сессий и диалогов (`sessions.py`), реплик и журнала выгрузок (`messages.py`), посетителей и медиа. |

@@ -369,3 +369,17 @@ CREATE INDEX IF NOT EXISTS stored_media_owner_idx
 
 COMMENT ON TABLE stored_media IS 'Медиа, которое человек прислал в диалог. Объект лежит в S3 по object_key';
 COMMENT ON COLUMN stored_media.kind IS 'photo, video, video_note — кружок, voice — голосовое';
+
+-- Журнал напоминаний: когда и в какой чат человеку ушло напоминание. Не чаще одного раза в сутки.
+CREATE TABLE IF NOT EXISTS reminder_log (
+    id BIGSERIAL PRIMARY KEY,
+    user_platform TEXT NOT NULL,
+    user_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL REFERENCES channels (id) ON DELETE CASCADE,
+    sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS reminder_log_user_idx
+    ON reminder_log (user_platform, user_id, channel_id, sent_at DESC);
+
+COMMENT ON TABLE reminder_log IS 'Напоминания, поставленные в очередь рассылки. Нужна для паузы MIN_INTERVAL_HOURS';

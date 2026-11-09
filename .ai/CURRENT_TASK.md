@@ -1,5 +1,9 @@
 # Текущая задача
 
+## Напоминания давно не заходившим — 2026-11-10
+
+Задача LoopOS 2026-11-10-reminders, ветка `loop/reminders` (worktree `.worktrees/vk-bot-reminders`). Статус: реализовано, ждёт ревью; push, merge и деплой не выполнялись. Выпускается выключенным (`reminders/settings.py: ENABLED = False`). Проверки — в [STATE.md](STATE.md). Следующий шаг: ревью, затем по правилам цикла merge свежего origin/master и деплой; включение напоминаний — отдельным решением (финальный текст, при желании `photo.jpg`, `ENABLED = True`).
+
 ## Оплата ЮKassa: доработка и страница оформления — 2026-11-04
 
 Ветка `loop/payments-complete` от `payments` (5c0e1c1), задача LoopOS 2026-11-04-payments-complete, попытка 1. Статус: реализовано, ждёт ревью; push и merge не выполнялись.
