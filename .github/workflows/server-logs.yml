@@ -51,7 +51,8 @@ jobs:
                      (SELECT string_agg(i.platform||':'||right(i.user_id::text,4),',') FROM premium_identities i WHERE i.account_id=o.account_id) identities,
                      (SELECT string_agg(b.platform||':'||right(b.user_id::text,4)||'='||coalesce(b.premium_until::text,'null'),',') FROM premium_identities i JOIN bot_users b ON b.platform=i.platform AND b.user_id=i.user_id WHERE i.account_id=o.account_id) bot_users
               FROM premium_orders o LEFT JOIN premium_accounts a ON a.id=o.account_id ORDER BY o.created_at DESC LIMIT 8;" 2>&1 || true
-            docker exec vk-bot-db psql -U supabase_admin -h localhost -c "\d bot_users" 2>&1 | head -30 || true
+            docker exec vk-bot-db psql -U supabase_admin -h localhost -c "SELECT id, renewal, created_at, sent_at FROM premium_notices ORDER BY id DESC LIMIT 5" 2>&1 || true
+            docker exec vk-premium-scheduler python -c "import redis,os;print('redis ping',redis.Redis.from_url(os.environ['REDIS_URL']).ping())" 2>&1 | tail -2 || true
 
   telegram-logs:
     runs-on: ubuntu-latest
