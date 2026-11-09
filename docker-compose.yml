@@ -71,8 +71,7 @@ services:
       CHAT_API_TG_TOKEN: ${CHAT_API_TG_TOKEN:-}
       ENGINE_FALLBACK_AFTER_SECONDS: ${ENGINE_FALLBACK_AFTER_SECONDS:-0}
       STATS_ONLINE_WINDOW_SECONDS: ${STATS_ONLINE_WINDOW_SECONDS:-300}
-      # Медиа лежат в Supabase Storage (S3-протокол, бакет chat-media). Для отката на Beget
-      # задайте MEDIA_S3_* в .env сервера (см. README). S3_* ниже в compose — только источник миграции.
+      # Медиа лежат в Supabase Storage (S3-протокол, бакет chat-media). Другое S3-хранилище можно задать MEDIA_S3_* в .env сервера.
       S3_ENDPOINT_URL: ${MEDIA_S3_ENDPOINT_URL:-http://storage:5000/s3}
       S3_REGION: ${MEDIA_S3_REGION:-local}
       S3_BUCKET: ${MEDIA_S3_BUCKET:-chat-media}
@@ -171,7 +170,7 @@ services:
       timeout: 3s
       retries: 10
 
-  # Разовый перенос медиа из S3 Beget (src) в Supabase Storage (dst). deploy/update.sh запускает его сам.
+  # Создание бакета в Supabase Storage (dst) через rclone. deploy/update.sh запускает его сам; старые медиа из Beget не переносятся.
   # Локально бакет создаётся так: docker compose --profile migrate run --rm media-migrate mkdir dst:chat-media
   media-migrate:
     image: rclone/rclone:1.69.1
@@ -180,12 +179,6 @@ services:
       storage:
         condition: service_healthy
     environment:
-      RCLONE_CONFIG_SRC_TYPE: s3
-      RCLONE_CONFIG_SRC_PROVIDER: Other
-      RCLONE_CONFIG_SRC_ENDPOINT: ${S3_ENDPOINT_URL:-}
-      RCLONE_CONFIG_SRC_REGION: ${S3_REGION:-ru1}
-      RCLONE_CONFIG_SRC_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-}
-      RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-}
       RCLONE_CONFIG_DST_TYPE: s3
       RCLONE_CONFIG_DST_PROVIDER: Other
       RCLONE_CONFIG_DST_ENDPOINT: http://storage:5000/s3

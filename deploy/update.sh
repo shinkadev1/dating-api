@@ -124,7 +124,7 @@ if ! optional_secret CHAT_API_TG_TOKEN; then
   drop_env CHAT_API_TG_TOKEN
 fi
 
-# Фото, видео, кружки и голосовые. Без ключей API стартует, загрузка отвечает 503.
+# Ключи Beget больше не читаются (медиа в Supabase Storage); блок оставлен, чтобы старые значения не ломали .env.
 if optional_secret S3_ACCESS_KEY && optional_secret S3_SECRET_KEY && optional_secret S3_BUCKET; then
   if ! optional_secret S3_ENDPOINT_URL; then
     set_env S3_ENDPOINT_URL "https://s3.ru1.storage.beget.cloud"
@@ -133,7 +133,7 @@ if optional_secret S3_ACCESS_KEY && optional_secret S3_SECRET_KEY && optional_se
     set_env S3_REGION "ru1"
   fi
 else
-  echo "Нет ключей S3: медиа не сохраняется."
+  echo "Нет ключей Beget S3: они не используются, медиа лежат в Supabase Storage."
   drop_env S3_ACCESS_KEY
   drop_env S3_SECRET_KEY
   drop_env S3_BUCKET
@@ -141,7 +141,7 @@ else
   drop_env S3_REGION
 fi
 
-# Supabase Storage: ключи S3-протокола знают только сервер (Chat API и rclone) и storage-api.
+# Supabase Storage: ключи S3-протокола знают только сервер (Chat API и rclone, создающий бакет) и storage-api.
 # Образцовые значения local-storage-* из .env.example на сервер не попадают: вместо них генерируется случайный ключ.
 ensure_storage_secret() {
   key=$1
@@ -335,17 +335,17 @@ if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
 fi
 
 docker compose pull
-# rclone нужен деплою до конца (перенос и проверка), а образ профиля migrate обычным pull не скачивается.
-docker compose --profile migrate pull media-migrate
+# rclone создаёт бакет, а образ профиля migrate обычным pull не скачивается; нужен до docker logout.
+timeout 300 docker compose --profile migrate pull media-migrate
 docker logout >/dev/null 2>&1 || true
-docker compose up -d --no-build --wait db redis
+docker compose up -d --no-build --wait --wait-timeout 180 db redis
 
 pgdb=$(env_value POSTGRES_DB)
 pgdb=${pgdb:-postgres}
 
 # Диагностика перед хранилищем: только чтение, результат в лог.
 echo "Диагностика Supabase Storage (только чтение):"
-docker compose exec -T db psql -U supabase_admin -d "$pgdb" -Atc "
+timeout 60 docker compose exec -T db psql -U supabase_admin -d "$pgdb" -Atc "
   SELECT 'роль ' || r || ': ' || CASE WHEN EXISTS (SELECT FROM pg_roles WHERE rolname = r) THEN 'есть' ELSE 'нет' END
   FROM unnest(ARRAY['anon', 'authenticated', 'service_role', 'supabase_storage_admin', 'postgres']) AS r
   UNION ALL
@@ -355,82 +355,22 @@ docker_root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || true)
 df -h "${docker_root:-/var/lib/docker}" 2>/dev/null || df -h / || true
 
 # Роли для миграций storage-api. Скрипт идемпотентен; chat-api прогоняет его же при старте.
-docker compose exec -T db psql -v ON_ERROR_STOP=1 -U supabase_admin -d "$pgdb" -f /docker-entrypoint-initdb.d/003_storage_roles.sql
-docker compose up -d --no-build --wait storage storage-gw
+timeout 120 docker compose exec -T db psql -v ON_ERROR_STOP=1 -U supabase_admin -d "$pgdb" -f /docker-entrypoint-initdb.d/003_storage_roles.sql
+docker compose up -d --no-build --wait --wait-timeout 300 storage storage-gw
 
-# Перенос медиа: rclone копирует из Beget в Supabase Storage, источник не меняется (ни sync, ни move, ни delete).
-rclone_run() {
-  docker compose --profile migrate run --rm -T media-migrate "$@"
-}
-
-rclone_mkdir_bucket() {
-  mkdir_out=$(rclone_run mkdir dst:chat-media 2>&1) && return 0
+# Бакет chat-media создаём ДО переключения chat-api (идемпотентно; ошибка "уже существует" не фатальна).
+# Старые медиа из Beget не переносятся. Шаг ограничен по времени, вывод ошибки печатается.
+mkdir_out=$(timeout 180 docker compose --profile migrate run --rm -T media-migrate mkdir dst:chat-media 2>&1) || {
   if printf '%s' "$mkdir_out" | grep -qi "already"; then
-    return 0
-  fi
-  printf '%s\n' "$mkdir_out" >&2
-  return 1
-}
-
-# Число байт из вывода rclone size --json.
-rclone_bytes() {
-  printf '%s' "$1" | sed -n 's/.*"bytes":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | head -n 1
-}
-
-migrate_media=0
-beget_bucket=$(env_value S3_BUCKET)
-if [ -n "$(env_value S3_ACCESS_KEY)" ] && [ -n "$(env_value S3_SECRET_KEY)" ] && [ -n "$beget_bucket" ] && [ -n "$(env_value S3_ENDPOINT_URL)" ]; then
-  has_beget=1
-else
-  has_beget=0
-fi
-# MEDIA_S3_ENDPOINT_URL в .env сервера = ручной откат: Chat API пишет в Beget, копировать в chat-media нечего.
-if [ -n "$(env_value MEDIA_S3_ENDPOINT_URL)" ]; then
-  echo "Задан MEDIA_S3_ENDPOINT_URL: Chat API работает с внешним хранилищем, перенос из Beget пропущен."
-  has_beget=0
-fi
-
-rclone_mkdir_bucket || fail "Не удалось создать бакет chat-media в Supabase Storage."
-if [ "$has_beget" -eq 1 ]; then
-  # Докопирование на каждом деплое: после отката на Beget там появляются новые объекты, которых нет в chat-media.
-  migrate_media=1
-  if [ ! -f .media-migrated ]; then
-    # Место проверяем только до первого полного переноса.
-    src_json=$(rclone_run size --json "src:${beget_bucket}" 2>/dev/null) || fail "Не удалось измерить бакет Beget."
-    src_bytes=$(rclone_bytes "$src_json")
-    [ -n "$src_bytes" ] || fail "Не удалось прочитать размер бакета Beget."
-    avail_kb=$(df -Pk "${docker_root:-/var/lib/docker}" 2>/dev/null | awk 'NR==2 {print $4}')
-    if [ -z "$avail_kb" ]; then
-      avail_kb=$(df -Pk / | awk 'NR==2 {print $4}')
-    fi
-    need_bytes=$((src_bytes + src_bytes / 2 + 1073741824))
-    echo "Медиа в Beget: ${src_bytes} байт; нужно места не меньше ${need_bytes}, свободно $((avail_kb * 1024))."
-    if [ $((avail_kb * 1024)) -lt "$need_bytes" ]; then
-      fail "Мало места для переноса медиа: chat-api не переключён, освободите диск."
-    fi
-  fi
-  echo "Перенос медиа, проход 1 (Chat API пока на прежнем хранилище)."
-  rclone_run copy "src:${beget_bucket}" dst:chat-media --size-only --transfers 4 || fail "rclone copy (проход 1) завершился ошибкой."
-else
-  echo "Перенос медиа из Beget не нужен."
-fi
-
-docker compose up -d --no-build --force-recreate chat-api
-
-if [ "$migrate_media" -eq 1 ]; then
-  echo "Перенос медиа, проход 2 (объекты, пришедшие во время переноса)."
-  rclone_run copy "src:${beget_bucket}" dst:chat-media --size-only --transfers 4 || fail "rclone copy (проход 2) завершился ошибкой."
-  if check_out=$(rclone_run check "src:${beget_bucket}" dst:chat-media --size-only --one-way 2>&1) &&
-     printf '%s' "$check_out" | grep -q "0 differences found"; then
-    # Маркер только пропускает проверку места; докопирование выполняется на каждом деплое.
-    touch .media-migrated
-    echo "Проверка переноса: расхождений нет."
+    echo "Бакет chat-media уже существует."
   else
     printf '%s
-' "$check_out" | tail -n 30 >&2
-    fail "После переноса медиа есть расхождения между Beget и chat-media."
+' "$mkdir_out" | tail -n 30 >&2
+    fail "Не удалось создать бакет chat-media в Supabase Storage."
   fi
-fi
+}
+
+docker compose up -d --no-build --force-recreate chat-api
 
 if [ -n "$optional_services" ]; then
   # shellcheck disable=SC2086 # список сервисов разделён пробелами
@@ -523,7 +463,7 @@ SMOKE_KEY=$(env_value STORAGE_S3_ACCESS_KEY_ID)
 SMOKE_SECRET=$(env_value STORAGE_S3_SECRET_KEY)
 export SMOKE_KEY SMOKE_SECRET
 tries=0
-until docker exec -e SMOKE_KEY -e SMOKE_SECRET vk-chat-api python -c "$smoke_s3"; do
+until timeout 60 docker exec -e SMOKE_KEY -e SMOKE_SECRET vk-chat-api python -c "$smoke_s3"; do
   tries=$((tries + 1))
   if [ "$tries" -ge 3 ]; then
     echo "SMOKE: put/get/delete через storage из chat-api не прошёл." >&2
@@ -545,7 +485,7 @@ fetch("http://storage-gw:8000/storage/v1/bucket", { headers: { Authorization: "B
   .catch((e) => { console.error(e.message); process.exit(1); });
 '
 tries=0
-until docker exec vk-bot-studio node -e "$smoke_studio"; do
+until timeout 60 docker exec vk-bot-studio node -e "$smoke_studio"; do
   tries=$((tries + 1))
   if [ "$tries" -ge 10 ]; then
     echo "SMOKE: Studio не видит бакет chat-media через storage-gw." >&2
@@ -554,11 +494,9 @@ until docker exec vk-bot-studio node -e "$smoke_studio"; do
   sleep 6
 done
 
-# Размеры бакетов и записи в базе — для сверки в логе.
-if [ "$has_beget" -eq 1 ]; then
-  echo "Beget: $(rclone_run size --json "src:${beget_bucket}" 2>/dev/null || echo 'не удалось прочитать')"
-fi
-echo "chat-media: $(rclone_run size --json dst:chat-media 2>/dev/null || echo 'не удалось прочитать')"
-echo "stored_media (записей|байт): $(docker compose exec -T db psql -U supabase_admin -d "$pgdb" -Atc 'SELECT count(*), COALESCE(sum(size_bytes), 0) FROM stored_media' 2>/dev/null || echo 'не удалось прочитать')"
+# Размер бакета и записи в базе — для сверки в логе.
+size_out=$(timeout 120 docker compose --profile migrate run --rm -T media-migrate size --json dst:chat-media 2>&1) || size_out="не удалось прочитать: $(printf '%s' "$size_out" | tail -n 3)"
+echo "chat-media: $(printf "%s" "$size_out" | grep "^{" || printf "%s" "$size_out" | tail -n 3)"
+echo "stored_media (записей|байт): $(timeout 60 docker compose exec -T db psql -U supabase_admin -d "$pgdb" -Atc 'SELECT count(*), COALESCE(sum(size_bytes), 0) FROM stored_media' || echo 'не удалось прочитать')"
 
 docker image prune -af
