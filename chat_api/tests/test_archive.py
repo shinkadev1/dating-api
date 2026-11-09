@@ -49,7 +49,10 @@ def message_row(message_id: int) -> dict:
 
 
 class FakeConn:
-    pass
+    closed = False
+
+    async def close(self) -> None:
+        self.closed = True
 
 
 class FakePool:
@@ -181,6 +184,19 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("S3 не настроен: архив сообщений пропущен", "\n".join(logs.output))
         self.assertEqual(repo.commits, [])
         self.assertEqual(store.objects, {})
+
+    async def test_unlock_failure_closes_connection(self) -> None:
+        repo = FakeRepo([message_row(1)])
+
+        async def broken_unlock(conn: object) -> None:
+            raise RuntimeError("обрыв")
+
+        repo.archive_unlock = broken_unlock  # type: ignore[method-assign]
+        pool = FakePool()
+        with patch.object(archive_module, "repo", repo), self.assertLogs(archive_module.logger, level=logging.ERROR) as logs:
+            await MessageArchiver(pool, FakeStorage(), hot_days=90).run_once(today=TODAY)  # type: ignore[arg-type]
+        self.assertTrue(pool.conn.closed)
+        self.assertIn("не снял блокировку", "\n".join(logs.output))
 
     async def test_lock_not_taken_does_nothing(self) -> None:
         repo = FakeRepo([message_row(1)], locked=False)

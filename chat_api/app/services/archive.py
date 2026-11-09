@@ -74,7 +74,12 @@ class MessageArchiver:
             try:
                 return await self._archive_days(conn, cutoff)
             finally:
-                await repo.archive_unlock(conn)
+                try:
+                    await repo.archive_unlock(conn)
+                except Exception as exc:
+                    # Блокировка сессионная: без снятия её держит соединение, поэтому закрываем его.
+                    logger.error("Архив сообщений: не снял блокировку (%s), соединение закрыто", type(exc).__name__)
+                    await conn.close()
 
     async def _archive_days(self, conn: Any, cutoff: date) -> int:
         done = 0

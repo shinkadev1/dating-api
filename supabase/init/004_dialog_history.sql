@@ -61,6 +61,7 @@ BEGIN
     FOREACH role_name IN ARRAY ARRAY['anon', 'authenticated'] LOOP
         IF EXISTS (SELECT FROM pg_roles WHERE rolname = role_name) THEN
             EXECUTE format('REVOKE ALL ON TABLE dialogs, messages, message_archives FROM %I', role_name);
+            EXECUTE format('REVOKE ALL ON SEQUENCE dialogs_id_seq, messages_id_seq FROM %I', role_name);
         END IF;
     END LOOP;
 END
