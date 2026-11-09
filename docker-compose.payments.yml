@@ -21,6 +21,8 @@ x-pay-env: &pay-env
   YOOKASSA_VAT_CODE: ${YOOKASSA_VAT_CODE:-}
   YOOKASSA_PAYMENT_SUBJECT: ${YOOKASSA_PAYMENT_SUBJECT:-}
   YOOKASSA_WEBHOOK_IPS: ${YOOKASSA_WEBHOOK_IPS:-}
+  # Поток уведомлений Chat API: после оплаты бот пишет человеку «Премиум активен до …».
+  REDIS_URL: redis://redis:6379/0
 
 services:
   premium:

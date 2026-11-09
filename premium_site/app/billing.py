@@ -68,6 +68,8 @@ def schema():
             c.execute('ALTER TABLE premium_subscriptions ALTER COLUMN email DROP NOT NULL')
             # A subscription started from an email session cannot be cancelled from a chat-link session.
             c.execute('ALTER TABLE premium_subscriptions ADD COLUMN IF NOT EXISTS created_via_link BOOLEAN NOT NULL DEFAULT FALSE')
+            from . import notify
+            notify.schema(c)
 
 REJECTED_TEXT='ЮKassa отклонила платёж. Проверьте данные и попробуйте оформить заказ заново; если ошибка повторится, напишите в поддержку support@chatwithyou.site.'
 
@@ -211,6 +213,8 @@ def process(order_id,provider=None):
                     c.execute("UPDATE premium_subscriptions SET period_end=%s,plan_id=%s,trial_used=trial_used OR %s,method_id=CASE WHEN auto_renew AND %s THEN %s ELSE NULL END,auto_renew=auto_renew AND %s WHERE account_id=%s",(until,renewal_terms(row['plan_id'])[0],row['plan_id']=='trial',saved,method.get('id') if saved else None,saved,uid))
                     c.execute("UPDATE premium_orders SET status='paid',applied_at=NOW() WHERE id=%s",(order_id,))
                     sync_bot_users(c,uid)
+                    from . import notify
+                    notify.enqueue(c,uid,until,'payment_method_id' in row['payload'])  # «Премиум активен» в бот, тем же коммитом
                 elif status=='canceled':
                     c.execute("UPDATE premium_orders SET status='failed' WHERE id=%s",(order_id,))
                     c.execute('UPDATE premium_subscriptions SET auto_renew=FALSE WHERE account_id=%s',(uid,))

@@ -11,7 +11,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from app import billing, identity
+from app import billing, identity, notify
 
 APP_DIR=Path(__file__).resolve().parent
 app=FastAPI(title='Premium')
@@ -249,6 +249,7 @@ def refresh(request:Request,order_id:UUID,csrf:str=Form()):
     error=None
     try: billing.process(order_id)
     except HTTPException as exc: error=str(exc.detail)
+    notify.drain_quietly()
     return order_view(request,get_order(request,order_id),error)
 
 @app.post('/orders/{order_id}/stop-renewal')
@@ -300,4 +301,5 @@ def webhook(request:Request,body:Notification):
     try: payment_id=UUID(str(body.object.get('id')))
     except ValueError: raise HTTPException(422,'Некорректный платёж')
     billing.webhook(str(payment_id))
+    notify.drain_quietly()
     return {'ok':True}

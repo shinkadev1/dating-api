@@ -1,5 +1,7 @@
 """Checkout page, consent enforcement and order/account pages through the real app on PostgreSQL."""
 import copy
+import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 import os
 import re
@@ -11,7 +13,7 @@ import psycopg
 from psycopg.conninfo import make_conninfo
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from app import billing, identity, paylink
+from app import billing, identity, notify, paylink
 from app.main import app
 
 FORBIDDEN = [r'(?<![\d.])(399|199|99)(?![\d])', 'urle.su', 'PCI DSS', '24/7', 'Гарантия возврата', 'Завершите за']
@@ -166,6 +168,50 @@ class CheckoutTests(unittest.TestCase):
             self.assertTrue(identity.consume_link_nonce(token))
             response = self.client.get('/checkout/' + token, follow_redirects=False)
         self.assertEqual(response.status_code, 303); self.assertEqual(response.headers['location'], '/?link=used')
+
+    def test_paid_bot_link_order_notifies_the_chat(self):
+        with billing.connect() as c:
+            c.execute("CREATE TABLE channels(id BIGSERIAL PRIMARY KEY,platform TEXT NOT NULL,external_id TEXT NOT NULL,title TEXT NOT NULL DEFAULT '')")
+            c.execute("CREATE TABLE user_channels(user_platform TEXT NOT NULL,user_id BIGINT NOT NULL,channel_id BIGINT NOT NULL)")
+            bot = c.execute("INSERT INTO channels(platform,external_id) VALUES('tg','neonbot') RETURNING id").fetchone()['id']
+            other = c.execute("INSERT INTO channels(platform,external_id) VALUES('tg','otherbot') RETURNING id").fetchone()['id']
+            c.execute("INSERT INTO user_channels VALUES('tg',4242,%s),('tg',9999,%s)", (bot, other))
+        token = paylink.sign('tg', 4242, 'p' * 32)
+        with patch.dict(os.environ, {'PREMIUM_LINK_SECRET': 'p' * 32}):
+            csrf = re.search(r'name="csrf" value="([^"]+)"', self.client.get('/checkout/' + token, params={'plan': 'trial'}).text).group(1)
+            self.client.post('/checkout', data={'csrf': csrf, 'plan': 'trial', 'request_key': str(uuid4()), 'consent_terms': 'yes', 'consent_recurring': billing.CONSENT_VERSION, 'token': token}, follow_redirects=False)
+        order = self.row('SELECT * FROM premium_orders')
+        sent = []
+        class Redis:
+            def xadd(self, stream, fields, **kw): sent.append((stream, json.loads(fields['data'])))
+        self.assertEqual(notify.drain(Redis()), 0)  # nothing before the payment succeeds
+        payment = next(iter(self.psp.payments.values())); payment.update(status='succeeded', paid=True, payment_method={'saved': True, 'id': 'card-1'})
+        billing.process(order['id'])
+        self.assertEqual(notify.drain(Redis()), 1)
+        stream, body = sent[0]
+        self.assertEqual(stream, 'chat:broadcast:tg')
+        self.assertEqual(body['to'], {'platform': 'tg', 'bot_key': 'neonbot', 'user_id': 4242})
+        self.assertEqual(body['type'], 'notice'); self.assertIn('премиум активен до', body['text'])
+        self.assertEqual(notify.drain(Redis()), 0)  # sent once
+        billing.process(order['id']); self.assertEqual(notify.drain(Redis()), 0)  # re-check does not repeat it
+
+    def test_notice_waits_while_redis_is_down(self):
+        account = self.login()
+        with billing.connect() as c: notify.enqueue(c, account, datetime.now(timezone.utc), False)
+        class Down:
+            def xadd(self, *a, **k): raise ConnectionError('down')
+        with patch.object(notify, 'recipients', return_value=[('vk', '1', 5)]):
+            with patch.object(notify, 'redis_client', return_value=Down()): self.assertEqual(notify.drain_quietly(), 0)
+            self.assertIsNone(self.row('SELECT sent_at FROM premium_notices')['sent_at'])
+            sent = []
+            class Up:
+                def xadd(self, stream, fields, **kw): sent.append(stream)
+            self.assertEqual(notify.drain(Up()), 1); self.assertEqual(sent, ['chat:broadcast:vk'])
+
+    def test_notice_text(self):
+        until = datetime(2026, 11, 12, 11, 1, tzinfo=timezone.utc)
+        self.assertEqual(notify.text(until, False), '👑 Оплата прошла, премиум активен до 12.11.2026 14:01 (МСК).\nТеперь можно отправлять фото, видео и голосовые.')
+        self.assertTrue(notify.text(until, True).startswith('👑 Премиум продлён до 12.11.2026 14:01'))
 
     def test_declined_consent_does_not_burn_bot_link(self):
         token = paylink.sign('vk', 77, 'p' * 32)
