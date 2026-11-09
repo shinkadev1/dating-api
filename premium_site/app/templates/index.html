@@ -31,7 +31,7 @@
       <label class="check"><input type="checkbox" name="consent_terms" value="yes" required>
         <span>Я согласен с <a href="https://chatwithyou.site/policy/" target="_blank" rel="noopener">политикой конфиденциальности</a>, <a href="https://chatwithyou.site/terms/" target="_blank" rel="noopener">условиями пользования</a> и <a href="https://chatwithyou.site/#premium" target="_blank" rel="noopener">тарифами</a> сервиса.</span></label>
       <label class="check"><input type="checkbox" name="consent_recurring" value="{{ consent_version }}" required>
-        <span>Я согласен на сохранение способа оплаты и автоматические списания: после {{ chosen.days }} дней — {{ chosen.renewal_price }} ₽ каждые {{ chosen.renewal_days }} дней автоматически до отключения. Отключить продление можно в любой момент{% if owner.account_id %} в аккаунте{% else %} на странице заказа или через support@chatwithyou.site{% endif %}, оплаченный срок сохраняется.</span></label>
+        <span>Я согласен на сохранение способа оплаты и автоматические списания: после {{ chosen.days }} дней — {{ chosen.renewal_price }} ₽ каждые {{ chosen.renewal_days }} дней автоматически до отключения. Отключить продление можно в любой момент, оплаченный срок сохраняется: {% if owner.account_id %}в аккаунте{% else %}на странице заказа или через support@chatwithyou.site{% endif %}.</span></label>
       <button class="btn big" id="pay" disabled>Перейти к оплате →</button>
       <noscript><button class="btn big">Перейти к оплате →</button><style>#pay{display:none}</style></noscript>
     </form>
