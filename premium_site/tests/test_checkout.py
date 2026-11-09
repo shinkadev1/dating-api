@@ -110,7 +110,7 @@ class CheckoutTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         order = self.row('SELECT * FROM premium_orders')
         account = self.row('SELECT * FROM premium_accounts WHERE id=%s', (order['account_id'],))
-        self.assertEqual(account['email'], 'guest@example.test')
+        self.assertEqual(account['email'], 'guest@example.test'); self.assertFalse(account['email_verified'])
         self.assertEqual(response.headers['location'], 'https://yoomoney.example/checkout/' + str(order['id']))
         # The browser is not signed in to the account, but sees the order it created.
         self.assertIsNone(identity.session(SimpleNamespace(cookies=self.client.cookies))['account_id'])
@@ -118,13 +118,45 @@ class CheckoutTests(unittest.TestCase):
         self.assertEqual(self.client.get('/account').status_code, 401)
         # A second press while the payment is unfinished reopens the same order.
         again = self.post(plan='trial', email='guest@example.test')
-        self.assertEqual(again.headers['location'], '/orders/' + str(order['id']))
+        self.assertEqual(again.headers['location'], response.headers['location'])
+        # Another browser with the same email is refused with the generic text.
+        with TestClient(app) as other:
+            other_csrf = re.search(r'name="csrf" value="([^"]+)"', other.get('/?plan=trial').text).group(1)
+            refused = other.post('/checkout', data={'csrf': other_csrf, 'plan': 'trial', 'request_key': str(uuid4()), 'consent_terms': 'yes', 'consent_recurring': billing.CONSENT_VERSION, 'email': 'guest@example.test'})
+        self.assertEqual(refused.status_code, 409); self.assertIn(billing.GUEST_REFUSED, refused.text)
         self.assertEqual(self.row('SELECT COUNT(*) n FROM premium_orders')['n'], 1)
 
     def test_guest_requires_valid_email(self):
         self.assertEqual(self.post(plan='trial', email='').status_code, 422)
         self.assertEqual(self.post(plan='trial', email='not-an-email').status_code, 422)
         self.assertIsNone(self.row('SELECT * FROM premium_orders'))
+
+    def test_guest_cannot_pay_into_confirmed_email_account(self):
+        self.login('verified@example.test'); self.client.cookies.clear()
+        response = self.post(plan='trial', email='verified@example.test')
+        self.assertEqual(response.status_code, 409); self.assertIn(billing.GUEST_REFUSED, response.text)
+        self.assertIsNone(self.row('SELECT * FROM premium_orders'))
+        self.assertIsNone(self.row('SELECT * FROM premium_subscriptions'))
+
+    def test_refused_guest_order_leaves_no_account(self):
+        with patch.dict(os.environ, {'YOOKASSA_RECEIPT_MODE': ''}):
+            self.assertEqual(self.post(plan='trial', email='nobody@example.test').status_code, 503)
+        self.assertIsNone(self.row("SELECT * FROM premium_accounts WHERE email='nobody@example.test'"))
+
+    def test_guest_checkout_is_rate_limited_per_email(self):
+        with patch.dict(os.environ, {'YOOKASSA_RECEIPT_MODE': ''}):
+            codes = [self.post(plan='trial', email='spam@example.test').status_code for _ in range(6)]
+        self.assertEqual(codes[:5], [503] * 5); self.assertEqual(codes[5], 429)
+
+    def test_signing_in_by_code_confirms_a_guest_email_account(self):
+        self.post(plan='week', email='later@example.test')
+        account = self.row('SELECT * FROM premium_accounts')['id']
+        owner = identity.session(SimpleNamespace(cookies=self.client.cookies))
+        with billing.connect() as c: c.execute("INSERT INTO premium_email_codes(session_digest,email,code_hash,expires_at) VALUES(%s,'later@example.test',%s,NOW()+INTERVAL '10 minutes')", (owner['digest'], identity.code_hash(owner['digest'], 'later@example.test', '123456')))
+        token = identity.verify_code(owner, '123456')
+        current = identity.session(SimpleNamespace(cookies={identity.COOKIE: token}))
+        self.assertEqual(current['account_id'], account)
+        self.assertTrue(self.row('SELECT email_verified FROM premium_accounts')['email_verified'])
 
     def test_guest_cannot_replace_saved_card_or_see_foreign_orders(self):
         account = self.login('owner@example.test')
@@ -134,7 +166,7 @@ class CheckoutTests(unittest.TestCase):
         foreign = self.row('SELECT id FROM premium_orders')['id']
         self.client.cookies.clear()
         response = self.post(plan='week', email='owner@example.test')
-        self.assertEqual(response.status_code, 409); self.assertIn('support@chatwithyou.site', response.text)
+        self.assertEqual(response.status_code, 409); self.assertIn(billing.GUEST_REFUSED, response.text)
         self.assertEqual(self.row('SELECT method_id FROM premium_subscriptions')['method_id'], 'card-1')
         self.assertEqual(self.client.get('/orders/' + str(foreign)).status_code, 404)
 

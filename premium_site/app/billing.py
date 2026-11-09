@@ -57,6 +57,8 @@ def schema():
             c.execute("CREATE TABLE IF NOT EXISTS premium_accounts(id UUID PRIMARY KEY,email TEXT UNIQUE NOT NULL,premium_until TIMESTAMPTZ,trial_used BOOLEAN NOT NULL DEFAULT FALSE)")
             # Accounts created from a signed chat link have no email until email linking exists.
             c.execute('ALTER TABLE premium_accounts ALTER COLUMN email DROP NOT NULL')
+            # FALSE only for accounts made by guest checkout from a typed, unconfirmed email.
+            c.execute('ALTER TABLE premium_accounts ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT TRUE')
             c.execute("CREATE TABLE IF NOT EXISTS premium_orders(id UUID PRIMARY KEY,vk_user_id BIGINT,amount_rub INTEGER NOT NULL,period_hours INTEGER NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending','paid','failed')),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
             for name,kind in [('account_id','UUID'),('plan_id','TEXT'),('request_key','UUID'),('payment_id','TEXT'),('payload','JSONB'),('applied_at','TIMESTAMPTZ'),('provider_status',"TEXT NOT NULL DEFAULT 'pending'"),('confirmation_url','TEXT'),('created_session','TEXT')]:
                 c.execute(f'ALTER TABLE premium_orders ADD COLUMN IF NOT EXISTS {name} {kind}')
@@ -112,28 +114,27 @@ def payload(order,email,method=None):
         body['receipt']={'customer':{'email':email},'items':[{'description':body['description'],'quantity':'1.00','amount':body['amount'],'vat_code':int(vat),'payment_subject':subject,'payment_mode':'full_payment'}]}
     return body
 
-GUEST_SUBSCRIBED='На этот email уже оформлена подписка с автопродлением. Чтобы изменить её, напишите на support@chatwithyou.site.'
+# One answer for every refusal of a guest: it must not reveal whether someone else's email has an account.
+GUEST_REFUSED='Оплатить на этот email сейчас не получится. Укажите другой email или напишите на support@chatwithyou.site.'
 
-def guest_account(email):
-    """Account of a buyer who only typed an email (not verified): found by email or created.
-    The browser session is never signed in to it; the buyer sees only orders it created itself."""
-    with connect() as c:
-        with c.transaction():
-            c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('email:'+email,))
-            row=c.execute('SELECT id FROM premium_accounts WHERE email=%s',(email,)).fetchone()
-            if row: return row['id']
-            return c.execute('INSERT INTO premium_accounts(id,email) VALUES(%s,%s) RETURNING id',(uuid4(),email)).fetchone()['id']
-
-def open_order(uid,session_digest):
-    """Unfinished order of this account that this browser session created, if any."""
-    with connect() as c:
-        return c.execute(f'SELECT o.* FROM premium_orders o WHERE o.account_id=%s AND o.created_session=%s AND {UNFINISHED} ORDER BY o.created_at DESC LIMIT 1',(uid,session_digest)).fetchone()
-
-def create_order(uid,plan,key,email,renew=False,via_link=False,consent_version=CONSENT_VERSION,session_digest=None,guest=False):
+def create_order(uid,plan,key,email,renew=False,via_link=False,consent_version=CONSENT_VERSION,session_digest=None,guest_email=None):
+    """guest_email: checkout without sign-in. The order goes to the account of that unconfirmed email,
+    created here in the same transaction (so a refused order leaves nothing behind); an account whose
+    email was confirmed by a code is never paid into by a guest."""
     plan=ALIASES.get(plan,plan)
     if plan not in PLANS: raise HTTPException(422,'Неизвестный тариф')
+    guest=bool(guest_email)
+    def refuse(text): raise HTTPException(409,GUEST_REFUSED if guest else text)
     with connect() as c:
         with c.transaction():
+            if guest:
+                c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('account-email:'+guest_email,))
+                found=c.execute('SELECT id,email_verified FROM premium_accounts WHERE email=%s',(guest_email,)).fetchone()
+                if found and found['email_verified']: refuse('')
+                uid=found['id'] if found else c.execute('INSERT INTO premium_accounts(id,email,email_verified) VALUES(%s,%s,FALSE) RETURNING id',(uuid4(),guest_email)).fetchone()['id']
+                # The same browser pressing "pay" again gets its unfinished order back.
+                mine=c.execute(f'SELECT o.* FROM premium_orders o WHERE o.account_id=%s AND o.created_session=%s AND {UNFINISHED} ORDER BY o.created_at DESC LIMIT 1',(uid,session_digest)).fetchone()
+                if mine: return mine
             c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(str(uid),))
             existing=c.execute('SELECT * FROM premium_orders WHERE account_id=%s AND request_key=%s',(uid,key)).fetchone()
             if existing:
@@ -143,12 +144,12 @@ def create_order(uid,plan,key,email,renew=False,via_link=False,consent_version=C
             if not owner: raise HTTPException(409,'Войдите в аккаунт оплаты')
             email=owner['email'] or email  # A chat-link account has no email: the one typed at checkout goes to the receipt.
             sub=c.execute('SELECT * FROM premium_subscriptions WHERE account_id=%s',(uid,)).fetchone()
-            if c.execute(f'SELECT 1 FROM premium_orders o WHERE o.account_id=%s AND {UNFINISHED}',(uid,)).fetchone(): raise HTTPException(409,'Уже есть незавершённый платёж')
-            if not renew and owner['premium_until'] and owner['premium_until']>datetime.now(timezone.utc): raise HTTPException(409,'Подписка уже оплачена')
-            if plan=='trial' and owner['trial_used']: raise HTTPException(409,'Пробный период уже использован')
+            if c.execute(f'SELECT 1 FROM premium_orders o WHERE o.account_id=%s AND {UNFINISHED}',(uid,)).fetchone(): refuse('Уже есть незавершённый платёж')
+            if not renew and owner['premium_until'] and owner['premium_until']>datetime.now(timezone.utc): refuse('Подписка уже оплачена')
+            if plan=='trial' and owner['trial_used']: refuse('Пробный период уже использован')
             if renew and (not sub or not sub['auto_renew'] or not sub['method_id'] or sub['period_end']>datetime.now(timezone.utc)): return None
             # An unverified buyer must not replace the saved card of someone else's subscription.
-            if not renew and guest and sub and sub['method_id']: raise HTTPException(409,GUEST_SUBSCRIBED)
+            if not renew and guest and sub and sub['method_id']: refuse('')
             if not renew and via_link and sub and sub['method_id']: raise HTTPException(409,'У подписки сохранена карта. Изменить тариф можно после входа по email')
             order={'id':uuid4(),'plan_id':plan,'amount_rub':PLANS[plan][2]}
             body=payload(order,email,sub['method_id'] if renew else None)

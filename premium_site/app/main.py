@@ -176,9 +176,8 @@ def checkout(request:Request,csrf:str=Form(),plan:str=Form(),request_key:UUID=Fo
         # A guest only types an email, no code: the purchase goes to the account of that email,
         # while this browser stays signed out and sees just the orders it created.
         typed=identity.normalize_email(email) if guest or email.strip() else None
-        account=billing.guest_account(typed) if guest else current['account_id']
-        if guest and (mine:=billing.open_order(account,current['digest'])): return RedirectResponse('/orders/'+str(mine['id']),303)
-        order=billing.create_order(account,plan,request_key,current['email'] or typed,via_link=guest or current['via_link'],consent_version=consent_recurring,session_digest=current['digest'],guest=guest)
+        if guest: identity.guest_checkout_allowed(typed,request.client.host if request.client else 'unknown')
+        order=billing.create_order(current['account_id'],plan,request_key,current['email'] or typed,via_link=guest or current['via_link'],consent_version=consent_recurring,session_digest=current['digest'],guest_email=typed if guest else None)
     except HTTPException as exc: return notice(request,str(exc.detail),exc.status_code)
     try: order=billing.process(order['id']) or order
     except billing.ProviderRejected as exc: return notice(request,str(exc.detail),exc.status_code)
@@ -198,6 +197,8 @@ def renewal_owner(current,order):
     """A guest may switch off renewal only from the session that bought the account's latest subscription."""
     if current['account_id'] or order['created_session']!=current['digest']: return False
     with billing.connect() as c:
+        # Once the email owner confirmed it with a code, the account is theirs to manage.
+        if c.execute('SELECT email_verified FROM premium_accounts WHERE id=%s',(order['account_id'],)).fetchone()['email_verified']: return False
         latest=c.execute("SELECT created_session FROM premium_orders WHERE account_id=%s AND NOT (payload ? 'payment_method_id') ORDER BY created_at DESC LIMIT 1",(order['account_id'],)).fetchone()
         sub=c.execute('SELECT auto_renew FROM premium_subscriptions WHERE account_id=%s',(order['account_id'],)).fetchone()
     return bool(latest and latest['created_session']==current['digest'] and sub and sub['auto_renew'])

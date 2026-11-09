@@ -171,6 +171,19 @@ def normalize_email(email):
     if len(email)>254 or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+',email): raise HTTPException(422,'Некорректный email')
     return email
 
+def throttle(c,limits):
+    """Count one attempt per (key, limit, seconds) window inside the caller's transaction; 429 over the limit."""
+    for key,limit,seconds in limits:
+        c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(key,))
+        row=c.execute('SELECT * FROM premium_auth_limits WHERE key=%s FOR UPDATE',(key,)).fetchone()
+        if row and row['expires_at']>datetime.now(timezone.utc) and row['count']>=limit: raise HTTPException(429,'Слишком много запросов; попробуйте позже')
+        c.execute('INSERT INTO premium_auth_limits(key,count,expires_at) VALUES(%s,1,NOW()+%s*INTERVAL \'1 second\') ON CONFLICT(key) DO UPDATE SET count=CASE WHEN premium_auth_limits.expires_at>NOW() THEN premium_auth_limits.count+1 ELSE 1 END,expires_at=CASE WHEN premium_auth_limits.expires_at>NOW() THEN premium_auth_limits.expires_at ELSE EXCLUDED.expires_at END',(key,seconds))
+
+def guest_checkout_allowed(email,ip):
+    """Guest checkout creates accounts and provider payments without any code, so it is rate limited."""
+    with connect() as c:
+        with c.transaction(): throttle(c,[('checkout-email:'+digest(email),5,3600),('checkout-ip:'+digest(ip),20,3600)])
+
 def request_code(owner,email,ip,attach=False):
     """Send a sign-in code. Returns 'confirm' (nothing sent) when a chat-link session must first confirm
     attaching the email to its chat profile; refuses an email that already has its own account."""
@@ -184,11 +197,7 @@ def request_code(owner,email,ip,attach=False):
     hashed=code_hash(owner['digest'],email,code)
     with connect() as c:
         with c.transaction():
-            for key,limit,seconds in [('email:'+digest(email),1,60),('ip:'+digest(ip),10,600)]:
-                c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(key,))
-                row=c.execute('SELECT * FROM premium_auth_limits WHERE key=%s FOR UPDATE',(key,)).fetchone()
-                if row and row['expires_at']>datetime.now(timezone.utc) and row['count']>=limit: raise HTTPException(429,'Слишком много запросов; попробуйте позже')
-                c.execute('INSERT INTO premium_auth_limits(key,count,expires_at) VALUES(%s,1,NOW()+%s*INTERVAL \'1 second\') ON CONFLICT(key) DO UPDATE SET count=CASE WHEN premium_auth_limits.expires_at>NOW() THEN premium_auth_limits.count+1 ELSE 1 END,expires_at=CASE WHEN premium_auth_limits.expires_at>NOW() THEN premium_auth_limits.expires_at ELSE EXCLUDED.expires_at END',(key,seconds))
+            throttle(c,[('email:'+digest(email),1,60),('ip:'+digest(ip),10,600)])
             c.execute("INSERT INTO premium_email_codes(session_digest,email,code_hash,expires_at,attach_account) VALUES(%s,%s,%s,NOW()+INTERVAL '10 minutes',%s) ON CONFLICT(session_digest) DO UPDATE SET email=EXCLUDED.email,code_hash=EXCLUDED.code_hash,attempts=0,expires_at=EXCLUDED.expires_at,attach_account=EXCLUDED.attach_account",(owner['digest'],email,hashed,link_account))
     try:
         secret=os.getenv('RESEND_API_KEY','')
@@ -224,7 +233,7 @@ def verify_code(owner,code):
                     c.execute('UPDATE premium_subscriptions SET email=%s WHERE account_id=%s',(email,link_account))
                     account=link_account
                 else:
-                    account=c.execute('INSERT INTO premium_accounts(id,email) VALUES(%s,%s) ON CONFLICT(email) DO UPDATE SET email=EXCLUDED.email RETURNING id',(uuid4(),email)).fetchone()['id']
+                    account=c.execute('INSERT INTO premium_accounts(id,email) VALUES(%s,%s) ON CONFLICT(email) DO UPDATE SET email_verified=TRUE RETURNING id',(uuid4(),email)).fetchone()['id']
                 c.execute('DELETE FROM premium_email_codes WHERE session_digest=%s',(owner['digest'],))
                 c.execute('DELETE FROM premium_sessions WHERE digest=%s',(owner['digest'],))
     if failure: raise HTTPException(409,'Неверный код')
