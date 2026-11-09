@@ -1,5 +1,9 @@
 # История важных изменений
 
+## 2026-11-10 — напоминания давно не заходившим (ветка `loop/reminders`)
+
+Фоновая задача `reminders` в lifespan Chat API раз в 15 минут ставит в рассылку (`publish_notices`, VK/TG боты и онлайн-гости сайта) текст из `reminders/content.py` людям, которые не появлялись в чате 24 ч–30 дн, не в поиске/диалоге, без напоминания за последние 24 ч и вне тихих часов 23:00–10:00 МСК. Параметры только в коде (`reminders/settings.py`), не в `.env`; выпущено выключенным (`ENABLED=False`). Новая таблица `reminder_log` (аддитивно, `001_schema.sql`). Причина: просьба пользователя о ежедневном напоминании после последнего действия. Для включения нужны правка `ENABLED`, финальный текст/фото и деплой.
+
 ## 2026-11-09 — медиа в Supabase Storage (ветка `loop/supabase-storage-media`)
 
 Фото, видео, кружки и голосовые хранятся в self-hosted Supabase Storage на том же сервере (бакет `chat-media`, виден в Studio → Storage → Files), а не в S3 Beget. Ключи объектов прежние. Добавлены `storage` (supabase/storage-api v1.74.0), `storage-gw` (nginx 1.27-alpine, `/storage/v1/*` для Studio), `media-migrate` (rclone 1.69.1, профиль migrate; теперь только создаёт бакет), `003_storage_roles.sql` (роли postgres/anon/authenticated/service_role/supabase_storage_admin, права на схему storage). `deploy/update.sh`: ключи `STORAGE_S3_*`, свои `JWT_SECRET`/`ANON_KEY`/`SERVICE_ROLE_KEY`, бакет до переключения chat-api, smoke, таймауты на всех сетевых шагах. Первый боевой деплой с переносом из Beget завис (`rclone size` ~24 мин, Beget недоступен) и был откачен; повтор без переноса: старые медиа не переносятся, для их `media_id` API отдаёт 502, новые загрузки работают. Проверено в Docker (свежий том и повторный прогон шагов деплоя).

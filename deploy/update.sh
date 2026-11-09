@@ -403,7 +403,7 @@ fi
 docker compose up -d --no-build studio meta cloudflared
 sleep 12
 docker logs vk-bot-cloudflared --tail 20 2>&1 | grep -E "Registered tunnel connection|ERR|error" || true
-docker logs vk-chat-api --tail 40 2>&1 | grep -E "Схема базы|Application startup|ERROR|Traceback" || true
+docker logs vk-chat-api --tail 40 2>&1 | grep -E "Схема базы|Application startup|Напоминания|ERROR|Traceback" || true
 if [ "$payments" -eq 1 ]; then
   docker logs vk-premium-web --tail 30 2>&1 | grep -E "Application startup|bot_users|ERROR|Traceback" || true
   docker logs vk-premium-scheduler --tail 30 2>&1 | grep -E "bot_users|failed|ERROR|Traceback" || true

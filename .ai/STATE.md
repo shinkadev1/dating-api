@@ -1,5 +1,9 @@
 # Состояние vk-bot
 
+## Ветка loop/reminders, 2026-11-10
+
+Worktree `.worktrees/vk-bot-reminders`, от origin/master 21a2a42. Добавлены пакет `chat_api/app/reminders/`, `repositories/reminders.py`, таблица `reminder_log` в конце `001_schema.sql`, задача `reminders` в `main.py`, «Напоминания» в grep логов `deploy/update.sh`, тесты `test_reminders.py` и `test_reminders_db.py`. `ENABLED = False`, конфигурация `config.py`/`.env.example`/`docker-compose.yml` не менялась. Проверки (venv Python 3.10, pgserver): `compileall` без ошибок; `pytest tests -q -rs` в `chat_api` — 40 passed, 0 skipped (в т.ч. test_reminders_db на реальном Postgres через pgserver); `sh -n deploy/update.sh` без ошибок. Не проверялось: запуск compose целиком, реальная доставка через Redis/ботов, S3-загрузка фото, деплой. Остаточный риск: при обрыве Redis посреди пачки возможен дубль до BATCH_SIZE-1 сообщений; `reminder_log` без ретенции; web получает только онлайн-гость.
+
 ## Ветка loop/supabase-storage-media, 2026-11-09 (повтор после отката)
 
 Медиа Chat API переключены на self-hosted Supabase Storage (`supabase/storage-api:v1.74.0`, S3-протокол, файловый бэкенд на томе `storage_data`), бакет `chat-media` создаётся пустым. Перенос из Beget убран: первый деплой завис на `rclone size` (Beget не работает), по решению пользователя старые медиа не переносятся. Для старых `media_id` `GET /media/{id}` отвечает 502 (запись в `stored_media` есть, объекта нет); 404 только без записи. `deploy/update.sh`: все сетевые шаги с `timeout`, ошибки печатаются; бакет создаётся до пересоздания chat-api; повторный деплой на уже созданных томе/ролях/схеме идемпотентен (проверено в Docker, два прогона шагов подряд). Остальное: `JWT_SECRET` убран из env db, демо JWT/`local-storage-*` отбрасываются, права anon/authenticated на таблицы storage выдают миграции storage-api. Сервер и update.sh целиком не проверялись.

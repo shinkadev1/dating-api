@@ -14,6 +14,7 @@ from redis.asyncio import Redis
 from app.config import get_settings
 from app.db import create_pool, ensure_schema
 from app.events import REDIS_SOCKET_TIMEOUT, EventBus, WebSocketHub
+from app.reminders.service import ReminderService
 from app.routers import channels, engine, media, peers, stats, visitors, ws
 from app.services.chat import ChatService
 from app.services.media import MediaService
@@ -46,13 +47,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     await storage.open()
     app.state.chat = ChatService(pool, EventBus(redis, settings.events_maxlen), settings)
-    app.state.media = MediaService(pool, storage)
+    media_service = MediaService(pool, storage)
+    app.state.media = media_service
+    reminders_task = asyncio.create_task(
+        ReminderService(pool, EventBus(redis, settings.events_maxlen), media_service).run(),
+        name="reminders",
+    )
     app.state.hub = hub
     app.state.pool = pool
     app.state.redis = redis
     try:
         yield
     finally:
+        reminders_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reminders_task
         hub_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await hub_task
