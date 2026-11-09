@@ -1,5 +1,6 @@
 """Checkout page, consent enforcement and order/account pages through the real app on PostgreSQL."""
 import copy
+from types import SimpleNamespace
 import os
 import re
 import unittest
@@ -99,9 +100,58 @@ class CheckoutTests(unittest.TestCase):
         self.assertNotIn('name="consent_terms"', html)
         for pattern in FORBIDDEN: self.assertIsNone(re.search(pattern, html), pattern)
 
-    def test_login_comes_before_card(self):
+    def test_guest_order_form_asks_only_email(self):
         html = self.client.get('/?plan=trial').text
-        self.assertIn('action="/auth/request"', html); self.assertNotIn('action="/checkout"', html)
+        self.assertIn('action="/checkout"', html); self.assertIn('name="email"', html)
+        self.assertNotIn('action="/auth/request"', html); self.assertNotIn('Получить код', html)
+
+    def test_guest_pays_by_typed_email_without_code(self):
+        response = self.post(plan='trial', email=' Guest@Example.test ')
+        self.assertEqual(response.status_code, 303)
+        order = self.row('SELECT * FROM premium_orders')
+        account = self.row('SELECT * FROM premium_accounts WHERE id=%s', (order['account_id'],))
+        self.assertEqual(account['email'], 'guest@example.test')
+        self.assertEqual(response.headers['location'], 'https://yoomoney.example/checkout/' + str(order['id']))
+        # The browser is not signed in to the account, but sees the order it created.
+        self.assertIsNone(identity.session(SimpleNamespace(cookies=self.client.cookies))['account_id'])
+        self.assertEqual(self.client.get('/orders/' + str(order['id'])).status_code, 200)
+        self.assertEqual(self.client.get('/account').status_code, 401)
+        # A second press while the payment is unfinished reopens the same order.
+        again = self.post(plan='trial', email='guest@example.test')
+        self.assertEqual(again.headers['location'], '/orders/' + str(order['id']))
+        self.assertEqual(self.row('SELECT COUNT(*) n FROM premium_orders')['n'], 1)
+
+    def test_guest_requires_valid_email(self):
+        self.assertEqual(self.post(plan='trial', email='').status_code, 422)
+        self.assertEqual(self.post(plan='trial', email='not-an-email').status_code, 422)
+        self.assertIsNone(self.row('SELECT * FROM premium_orders'))
+
+    def test_guest_cannot_replace_saved_card_or_see_foreign_orders(self):
+        account = self.login('owner@example.test')
+        with billing.connect() as c:
+            c.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,method_id) VALUES(%s,'week','owner@example.test','v','card-1')", (account,))
+            c.execute("INSERT INTO premium_orders(id,account_id,amount_rub,period_hours,status) VALUES(%s,%s,299,168,'paid')", (uuid4(), account))
+        foreign = self.row('SELECT id FROM premium_orders')['id']
+        self.client.cookies.clear()
+        response = self.post(plan='week', email='owner@example.test')
+        self.assertEqual(response.status_code, 409); self.assertIn('support@chatwithyou.site', response.text)
+        self.assertEqual(self.row('SELECT method_id FROM premium_subscriptions')['method_id'], 'card-1')
+        self.assertEqual(self.client.get('/orders/' + str(foreign)).status_code, 404)
+
+    def test_guest_buyer_can_stop_renewal_from_order_page(self):
+        self.post(plan='week', email='guest@example.test')
+        order = self.row('SELECT * FROM premium_orders')
+        with billing.connect() as c: c.execute("UPDATE premium_subscriptions SET method_id='card-9'")
+        html = self.client.get('/orders/' + str(order['id'])).text
+        self.assertIn('stop-renewal', html)
+        csrf = re.search(r'name="csrf" value="([^"]+)"', html).group(1)
+        with TestClient(app) as other:
+            other_csrf = re.search(r'name="csrf" value="([^"]+)"', other.get('/?plan=week').text).group(1)
+            self.assertEqual(other.post('/orders/%s/stop-renewal' % order['id'], data={'csrf': other_csrf}).status_code, 404)
+        self.assertEqual(self.client.post('/orders/%s/stop-renewal' % order['id'], data={'csrf': csrf}, follow_redirects=False).status_code, 303)
+        sub = self.row('SELECT * FROM premium_subscriptions')
+        self.assertFalse(sub['auto_renew']); self.assertIsNone(sub['method_id'])
+        self.assertNotIn('stop-renewal', self.client.get('/orders/' + str(order['id'])).text)
 
     def test_missing_consent_is_422_and_creates_nothing(self):
         self.login()

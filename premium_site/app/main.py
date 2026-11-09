@@ -166,12 +166,19 @@ def cancel(request:Request,csrf:str=Form()):
     return RedirectResponse('/account',303)
 
 @app.post('/checkout')
-def checkout(request:Request,csrf:str=Form(),plan:str=Form(),request_key:UUID=Form(),consent_terms:str=Form(default=''),consent_recurring:str=Form(default='')):
-    current=identity.csrf(request,csrf,True)
+def checkout(request:Request,csrf:str=Form(),plan:str=Form(),request_key:UUID=Form(),consent_terms:str=Form(default=''),consent_recurring:str=Form(default=''),email:str=Form(default='',max_length=254)):
+    current=identity.csrf(request,csrf)
     # The button state in the page is only a convenience: both consents are enforced here.
     if consent_terms!='yes' or consent_recurring!=billing.CONSENT_VERSION:
         return notice(request,'Отметьте оба согласия: с политикой, условиями и тарифами, а также с автопродлением. Без них оплата невозможна.',422)
-    try: order=billing.create_order(current['account_id'],plan,request_key,current['email'],via_link=current['via_link'],consent_version=consent_recurring)
+    guest=not current['account_id']
+    try:
+        # A guest only types an email, no code: the purchase goes to the account of that email,
+        # while this browser stays signed out and sees just the orders it created.
+        typed=identity.normalize_email(email) if guest or email.strip() else None
+        account=billing.guest_account(typed) if guest else current['account_id']
+        if guest and (mine:=billing.open_order(account,current['digest'])): return RedirectResponse('/orders/'+str(mine['id']),303)
+        order=billing.create_order(account,plan,request_key,current['email'] or typed,via_link=guest or current['via_link'],consent_version=consent_recurring,session_digest=current['digest'],guest=guest)
     except HTTPException as exc: return notice(request,str(exc.detail),exc.status_code)
     try: order=billing.process(order['id']) or order
     except billing.ProviderRejected as exc: return notice(request,str(exc.detail),exc.status_code)
@@ -180,24 +187,43 @@ def checkout(request:Request,csrf:str=Form(),plan:str=Form(),request_key:UUID=Fo
     return RedirectResponse('/orders/'+str(order['id']),303)
 
 def get_order(request,order_id):
-    current=owner(request)
-    with billing.connect() as c: row=c.execute('SELECT * FROM premium_orders WHERE id=%s AND account_id=%s',(order_id,current['account_id'])).fetchone()
+    """An order of the signed-in account, or one this browser session created (guest checkout by email)."""
+    current=identity.session(request)
+    if not current: raise HTTPException(404,'Счёт не найден')
+    with billing.connect() as c: row=c.execute('SELECT * FROM premium_orders WHERE id=%s AND (account_id=%s OR created_session=%s)',(order_id,current['account_id'],current['digest'])).fetchone()
     if not row: raise HTTPException(404,'Счёт не найден')
     return row
 
+def renewal_owner(current,order):
+    """A guest may switch off renewal only from the session that bought the account's latest subscription."""
+    if current['account_id'] or order['created_session']!=current['digest']: return False
+    with billing.connect() as c:
+        latest=c.execute("SELECT created_session FROM premium_orders WHERE account_id=%s AND NOT (payload ? 'payment_method_id') ORDER BY created_at DESC LIMIT 1",(order['account_id'],)).fetchone()
+        sub=c.execute('SELECT auto_renew FROM premium_subscriptions WHERE account_id=%s',(order['account_id'],)).fetchone()
+    return bool(latest and latest['created_session']==current['digest'] and sub and sub['auto_renew'])
+
+def order_view(request,order,error=None):
+    current=identity.session(request)
+    return page(request,'order.html',{'order':order,'short_id':str(order['id'])[:8],'error':error,'can_stop_renewal':bool(current) and renewal_owner(current,order)})
+
 @app.get('/orders/{order_id}')
 def order_page(request:Request,order_id:UUID):
-    row=get_order(request,order_id)
-    return page(request,'order.html',{'order':row,'short_id':str(row['id'])[:8]})
+    return order_view(request,get_order(request,order_id))
 
 @app.post('/orders/{order_id}/refresh')
 def refresh(request:Request,order_id:UUID,csrf:str=Form()):
-    identity.csrf(request,csrf,True);get_order(request,order_id)
+    identity.csrf(request,csrf);get_order(request,order_id)
     error=None
     try: billing.process(order_id)
     except HTTPException as exc: error=str(exc.detail)
-    order=get_order(request,order_id)
-    return page(request,'order.html',{'order':order,'short_id':str(order['id'])[:8],'error':error})
+    return order_view(request,get_order(request,order_id),error)
+
+@app.post('/orders/{order_id}/stop-renewal')
+def stop_renewal(request:Request,order_id:UUID,csrf:str=Form()):
+    current=identity.csrf(request,csrf);order=get_order(request,order_id)
+    if not renewal_owner(current,order): raise HTTPException(403,'Отключить продление может только тот, кто оформил подписку')
+    billing.cancel(order['account_id'])
+    return RedirectResponse('/orders/'+str(order_id),303)
 
 class Claim(BaseModel):
     code:str=Field(min_length=20,max_length=128)

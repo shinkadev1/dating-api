@@ -18,5 +18,9 @@
 <form method="post" action="/orders/{{ order.id }}/refresh"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn secondary">Проверить оплату</button></form>
 {% endif %}
 {% if order.status=='failed' %}<a class="btn" href="/?plan={{ order.plan_id or '' }}">Создать новый заказ</a>{% endif %}
-<p class="small"><a href="/account">Аккаунт и подписка</a></p>
+{% if can_stop_renewal %}
+<form method="post" action="/orders/{{ order.id }}/stop-renewal"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn secondary">Отключить автопродление</button></form>
+<p class="muted small">Оплаченный срок сохранится, новые списания не будут.</p>
+{% endif %}
+{% if owner.account_id %}<p class="small"><a href="/account">Аккаунт и подписка</a></p>{% else %}<p class="small"><a href="/">К тарифам</a></p>{% endif %}
 {% endblock %}
