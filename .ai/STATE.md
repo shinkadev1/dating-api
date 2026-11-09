@@ -1,9 +1,5 @@
 # Состояние vk-bot
 
-## Ветка loop/supabase-storage-media, 2026-11-09
-
-Медиа Chat API переезжают из S3 Beget в self-hosted Supabase Storage (`supabase/storage-api:v1.74.0`, S3-протокол, файловый бэкенд на томе `storage_data`). Изменены `docker-compose.yml` (сервисы `storage`, `storage-gw`, `media-migrate`; chat-api и studio переключены), `deploy/update.sh`, `supabase/init/003_storage_roles.sql`, `supabase/gateway/nginx.conf`, `.env.example`, README, `.ai/`. Код `chat_api/` не менялся. Проверены статически: `docker compose config`, `sh -n`/`bash -n`, генерация JWT. Docker daemon на машине разработки был недоступен, поэтому storage, шлюз, rclone и smoke в деле не запускались; сервер и боевой деплой не проверялись. Не подтверждено: что storage-api v1.74.0 принимает `DATABASE_URL` под `supabase_admin` и стартует без PostgREST (`POSTGREST_URL` указан на заглушку), что rclone совместим с S3-протоколом storage-api.
-
 ## Ветка loop/payments-complete, 2026-11-04
 
 Worktree `.worktrees/vk-bot-payments-complete`, от `payments` 5c0e1c1. Изменены только `premium_site/` (billing, main, identity, шаблоны, payment.css, тесты), `.env.example`, `premium_site/DEPLOY.md`, `.ai/`. База тестов: 38 passed; после изменений pytest premium_site на Postgres (pgserver): 57 passed, 0 skipped. Схема БД не менялась. Тесты с реальным тестовым магазином ЮKassa не запускались (нет ключей); отказ/неопределённый исход проверены на подставном провайдере и на мок-ответах httpx.

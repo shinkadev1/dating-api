@@ -1,9 +1,5 @@
 # История важных изменений
 
-## 2026-11-09 — медиа в Supabase Storage (ветка `loop/supabase-storage-media`)
-
-Фото, видео, кружки и голосовые теперь хранятся в self-hosted Supabase Storage на том же сервере (бакет `chat-media`, виден в Studio → Storage → Files), а не в S3 Beget. Ключи объектов сохранены; `stored_media.object_key` не менялся. Добавлены `storage` (supabase/storage-api v1.74.0, тег из docker-compose supabase/supabase на ревизии со studio 2026.09.07), `storage-gw` (nginx 1.27-alpine, `/storage/v1/*` для Studio), `media-migrate` (rclone 1.69.1, профиль migrate), `003_storage_roles.sql` (недостающие роли anon/authenticated/service_role/supabase_storage_admin). `deploy/update.sh`: ключи `STORAGE_S3_*`, свои `JWT_SECRET`/`ANON_KEY`/`SERVICE_ROLE_KEY` вместо демо, диагностика, проверка места, копирование Beget → chat-media двумя проходами с `rclone check`, маркер `.media-migrated`, smoke. Откат на Beget — `MEDIA_S3_*` в `.env` сервера (см. README). Beget-бакет не изменяется и не очищается. Docker на машине разработки недоступен: интеграционный прогон не выполнялся.
-
 ## 2026-11-04 — доработка оплаты ЮKassa (ветка `loop/payments-complete`)
 
 Страница оформления по структуре референса: тарифы проекта, два обязательных согласия (версия 2026-11-04, сервер проверяет сам), текст автопродления из `billing.renewal_terms`, понятные статусы заказа. Подтверждённый отказ ЮKassa (4xx при создании платежа) переводит заказ в failed/rejected и не блокирует новый; 429/5xx/сеть остаются «неизвестным исходом» с тем же Idempotence-Key. Отмена подписки очищает сохранённую карту (method_id). Блок кодов /link скрыт на странице аккаунта. Добавлена инструкция локального теста. Не сделано: возврат через API, `/link` в ботах.

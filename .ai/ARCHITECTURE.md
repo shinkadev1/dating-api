@@ -17,10 +17,9 @@ VK/TG → REST Chat API → ChatService → SQL/Redis → WebSocket клиент
 | `chat_api/app/events.py` | Redis Streams и выдача событий по WebSocket. |
 | `chat_api/app/deps.py` | Авторизация и ограничения платформ для токенов. |
 | `chat_api/app/db.py` | Повторный запуск всех SQL-файлов из init при старте. |
-| `supabase/init/` | 001_schema.sql, 002_premium_grant.sql, 003_storage_roles.sql: схема, данные и роли для Supabase Storage. |
-| `supabase/gateway/nginx.conf` | Шлюз `storage-gw`: `/storage/v1/*` → `storage:5000` для Studio. |
+| `supabase/init/` | 001_schema.sql и 002_premium_grant.sql: схема и изменения данных. |
 | `engine_bridge/app/bridge.py` | demand → hunt → внешний поиск → attach → пересылка. |
-| `docker-compose.yml` | Postgres, Redis, API, bridge, Studio, Supabase Storage (`storage`, `storage-gw`, том `storage_data`), rclone-перенос (`media-migrate`, профиль migrate). |
+| `docker-compose.yml` | Postgres, Redis, API, bridge и вспомогательные сервисы. |
 | `premium_site/` | Страница оплаты премиума (FastAPI/Jinja, ЮKassa, автопродление `python -m app.scheduler`). Та же база, что у Chat API. |
 | `docker-compose.payments.yml` | Overlay с `premium` и `premium-scheduler` (профиль `payments`). |
 
@@ -28,7 +27,7 @@ VK/TG → REST Chat API → ChatService → SQL/Redis → WebSocket клиент
 
 - Адрес участника: `(platform, bot_key, user_id)`; фазы: `idle`, `searching`, `chatting`. Ключ профиля bot_users в актуальной схеме — `(platform, user_id)`.
 - Живые люди приоритетны; engine не встаёт в человеческую очередь. Attach должен учитывать уже найденную пару и отмену поиска.
-- `POST .../media` сохраняет байты в Supabase Storage (бакет `chat-media`, S3-протокол `http://storage:5000/s3`, ключи `STORAGE_S3_*`, переопределение/откат на Beget через `MEDIA_S3_*`) и вызывает пересылку события; README с описанием только хранения устарел. Для TG предусмотрены file_id / method.
+- `POST .../media` сохраняет байты и вызывает пересылку события; README с описанием только хранения устарел. Для TG предусмотрены file_id / method.
 - Медиа уходит, только если премиум (`bot_users.premium_until > NOW()`) есть у отправителя и у живого собеседника; собеседник chat-engine исключён. Иначе 403 с «премиум» в detail до чтения файла: боты показывают предложение купить.
 - `GET .../premium/link` (токены vk/tg/web, не engine) → `{url, premium_active, premium_until}`; `url` = `PAY_PUBLIC_URL/?utm_source=<platform>&utm_campaign=premium&utm_content=<token>`. Токен — зашифрованный и подписанный `PREMIUM_LINK_SECRET` (platform, user_id, срок 24 часа), формат в `chat_api/app/premium_link.py` = `premium_site/app/paylink.py`. Без секрета — 503.
 - Доступ к медиа хранится в `bot_users.premium_until`. premium_site после оплаты, привязки профиля и входа по ссылке копирует срок аккаунта всем связанным `(platform, user_id)` (upsert, `GREATEST`), планировщик раз в минуту досинхронизирует активные аккаунты.
