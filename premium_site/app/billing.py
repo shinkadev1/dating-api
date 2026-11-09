@@ -114,6 +114,12 @@ def payload(order,email,method=None):
         body['receipt']={'customer':{'email':email},'items':[{'description':body['description'],'quantity':'1.00','amount':body['amount'],'vat_code':int(vat),'payment_subject':subject,'payment_mode':'full_payment'}]}
     return body
 
+class OpenOrderOtherPlan(HTTPException):
+    """This browser already has an unfinished payment for another tariff."""
+    def __init__(self,order_id):
+        super().__init__(409,'У вас есть незавершённый заказ на другой тариф. Завершите или отмените его оплату, затем оформите новый.')
+        self.order_id=order_id
+
 # One answer for every refusal of a guest: it must not reveal whether someone else's email has an account.
 GUEST_REFUSED='Оплатить на этот email сейчас не получится. Укажите другой email или напишите на support@chatwithyou.site.'
 
@@ -135,7 +141,8 @@ def create_order(uid,plan,key,email,renew=False,via_link=False,consent_version=C
             if session_digest and not renew:
                 # The same browser pressing "pay" again (e.g. back from ЮKassa) gets its unfinished order back.
                 mine=c.execute(f'SELECT o.* FROM premium_orders o WHERE o.account_id=%s AND o.created_session=%s AND {UNFINISHED} ORDER BY o.created_at DESC LIMIT 1',(uid,session_digest)).fetchone()
-                if mine: return mine
+                if mine and mine['plan_id']==plan: return mine
+                if mine: raise OpenOrderOtherPlan(mine['id'])
             c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(str(uid),))
             existing=c.execute('SELECT * FROM premium_orders WHERE account_id=%s AND request_key=%s',(uid,key)).fetchone()
             if existing:

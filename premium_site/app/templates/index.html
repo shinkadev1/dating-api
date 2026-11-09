@@ -30,7 +30,7 @@
       <input type="hidden" name="plan" value="{{ chosen.id }}">
       <input type="hidden" name="request_key" value="{{ request_key }}">
       {% if link_token %}<input type="hidden" name="token" value="{{ link_token }}">{% endif %}
-      {% if not owner.email %}<label class="field">Email{% if linked %} для чека{% endif %} <input name="email" type="email" autocomplete="email" maxlength="254"{% if not linked %} required{% endif %}></label>
+      {% if not owner.email or leaving %}<label class="field">Email{% if linked %} для чека{% endif %} <input name="email" type="email" autocomplete="email" maxlength="254"{% if not linked %} required{% endif %}></label>
       <p class="muted small">{% if linked %}Покупка останется у профиля {{ profile or "из чата" }}.{% else %}Подписка будет привязана к этому email, на него придёт чек.{% endif %}</p>{% endif %}
       <label class="check"><input type="checkbox" name="consent_terms" value="yes" required>
         <span>Я согласен с <a href="https://chatwithyou.site/policy/" target="_blank" rel="noopener">политикой конфиденциальности</a>, <a href="https://chatwithyou.site/terms/" target="_blank" rel="noopener">условиями пользования</a> и <a href="https://chatwithyou.site/#premium" target="_blank" rel="noopener">тарифами</a> сервиса.</span></label>

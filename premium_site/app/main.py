@@ -66,7 +66,7 @@ def plan_cards():
 
 def owner(request):
     current=identity.session(request)
-    if not current or not current['account_id']: raise HTTPException(401,'Войдите по email на странице оплаты')
+    if not current or not current['account_id']: raise HTTPException(401,'Откройте страницу оплаты по ссылке из бота VK или Telegram')
     return current
 
 @app.get('/health')
@@ -99,7 +99,10 @@ def link_offer(request:Request,token:str,plan:str=''):
     selected=billing.ALIASES.get(plan,plan)
     if selected and selected not in billing.PLANS: raise HTTPException(422,'Неизвестный тариф')
     current=identity.session(request)
-    leaving=bool(current and current['account_id'] and identity.identity_account(*claimed)!=current['account_id'])
+    mine=bool(current and current['account_id'] and identity.identity_account(*claimed)==current['account_id'])
+    leaving=bool(current and current['account_id'] and not mine)
+    # Read-only check: a link already used in another browser cannot pay; nothing is consumed here.
+    if not mine and identity.link_nonce_used(token): return RedirectResponse('/?link=used',303)
     cards=plan_cards()
     chosen=next((card for card in cards if card['id']==selected),None)
     return page(request,'index.html',{'cards':cards,'chosen':chosen,'consent_version':billing.CONSENT_VERSION,'request_key':str(uuid4()),
@@ -207,7 +210,7 @@ def place_order(request,current,plan,request_key,consent_recurring,email):
         typed=identity.normalize_email(email) if guest or email.strip() else None
         if guest: identity.guest_checkout_allowed(typed,request.client.host if request.client else 'unknown')
         order=billing.create_order(current['account_id'],plan,request_key,current['email'] or typed,via_link=guest or current['via_link'],consent_version=consent_recurring,session_digest=current['digest'],guest_email=typed if guest else None)
-    except HTTPException as exc: return notice(request,str(exc.detail),exc.status_code)
+    except HTTPException as exc: return notice(request,str(exc.detail),exc.status_code,getattr(exc,'order_id',None))
     try: order=billing.process(order['id']) or order
     except billing.ProviderRejected as exc: return notice(request,str(exc.detail),exc.status_code)
     except HTTPException as exc: return notice(request,str(exc.detail),exc.status_code,order['id'])  # The durable order stays available for reconciliation.

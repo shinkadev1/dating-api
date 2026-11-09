@@ -83,7 +83,8 @@ class CheckoutTests(unittest.TestCase):
         self.assertIn('name="consent_terms"', html); self.assertIn('name="consent_recurring"', html)
         self.assertRegex(html, r'<button class="btn big" id="pay" disabled>Перейти к оплате →</button>')
         self.assertIn('<noscript>', html)
-        for pattern in FORBIDDEN: self.assertIsNone(re.search(pattern, html), pattern)
+        visible = re.sub(r'value="[^"]*"', '', html)  # random csrf/request_key may contain digits like 99
+        for pattern in FORBIDDEN: self.assertIsNone(re.search(pattern, visible), pattern)
         self.assertNotIn('<img', html); self.assertNotIn('//cdn', html)
 
     def test_other_plan_cards_use_own_renewal_terms(self):
@@ -98,7 +99,8 @@ class CheckoutTests(unittest.TestCase):
         for plan in billing.PLANS: self.assertIn('href="/?plan=%s"' % plan, html)
         self.assertEqual(html.count('Выбрать'), len(billing.PLANS))
         self.assertNotIn('name="consent_terms"', html)
-        for pattern in FORBIDDEN: self.assertIsNone(re.search(pattern, html), pattern)
+        visible = re.sub(r'value="[^"]*"', '', html)  # random csrf/request_key may contain digits like 99
+        for pattern in FORBIDDEN: self.assertIsNone(re.search(pattern, visible), pattern)
 
     def test_guest_order_form_asks_only_email(self):
         html = self.client.get('/?plan=trial').text
@@ -144,9 +146,26 @@ class CheckoutTests(unittest.TestCase):
             self.assertEqual(self.row('SELECT COUNT(*) n FROM premium_orders')['n'], 1)
             self.assertEqual(again.headers['location'], response.headers['location'])
             with TestClient(app) as other:
-                other_csrf = re.search(r'name="csrf" value="([^"]+)"', other.get('/checkout/' + token, params={'plan': 'trial'}).text).group(1)
+                self.assertIn('Ссылка уже использована', other.get('/checkout/' + token, params={'plan': 'trial'}).text)
+                other_csrf = re.search(r'name="csrf" value="([^"]+)"', other.get('/?plan=trial').text).group(1)
                 reused = other.post('/checkout', data=dict(data, csrf=other_csrf, request_key=str(uuid4())))
             self.assertEqual(reused.status_code, 409); self.assertIn('Ссылка уже использована', reused.text)
+
+    def test_same_browser_other_plan_is_refused_with_order_link(self):
+        first = self.post(plan='month', email='switch@example.test')
+        self.assertEqual(first.status_code, 303)
+        order = self.row('SELECT * FROM premium_orders')
+        other = self.post(plan='year', email='switch@example.test')
+        self.assertEqual(other.status_code, 409)
+        self.assertIn('незавершённый заказ на другой тариф', other.text); self.assertIn('/orders/' + str(order['id']), other.text)
+        self.assertEqual(self.row('SELECT COUNT(*) n FROM premium_orders')['n'], 1)
+
+    def test_used_link_shows_hint_before_form(self):
+        token = paylink.sign('vk', 55, 'p' * 32)
+        with patch.dict(os.environ, {'PREMIUM_LINK_SECRET': 'p' * 32}):
+            self.assertTrue(identity.consume_link_nonce(token))
+            response = self.client.get('/checkout/' + token, follow_redirects=False)
+        self.assertEqual(response.status_code, 303); self.assertEqual(response.headers['location'], '/?link=used')
 
     def test_declined_consent_does_not_burn_bot_link(self):
         token = paylink.sign('vk', 77, 'p' * 32)

@@ -74,6 +74,11 @@ def consume_link_nonce(token):
     with connect() as c:
         return c.execute('INSERT INTO premium_link_nonces(digest) VALUES(%s) ON CONFLICT DO NOTHING RETURNING digest',(hashlib.sha256(paylink.nonce(token)).hexdigest(),)).fetchone() is not None
 
+def link_nonce_used(token):
+    """Read-only: whether this link token has already signed in somewhere."""
+    with connect() as c:
+        return c.execute('SELECT 1 FROM premium_link_nonces WHERE digest=%s',(hashlib.sha256(paylink.nonce(token)).hexdigest(),)).fetchone() is not None
+
 def platform_account(platform,user_id):
     """Find or create the per-platform premium account for a chat user and sync its access."""
     with connect() as c:

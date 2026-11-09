@@ -91,6 +91,7 @@ class LinkLoginTests(unittest.TestCase):
         old = self.client.get('/', params={'utm_source': 'vk', 'utm_campaign': 'premium', 'utm_content': token, 'plan': 'week'}, follow_redirects=False)
         self.assertEqual(old.status_code, 303); self.assertEqual(old.headers['location'], '/checkout/' + token + '?plan=week')
         with patch.object(identity, 'consume_link_nonce') as consumed, \
+             patch.object(identity, 'link_nonce_used', return_value=False), \
              patch.object(identity, 'platform_account') as found, \
              patch.object(identity, 'session', return_value=None), \
              patch.object(identity, 'new_session', return_value=('anon-token', anonymous)) as created:
@@ -178,6 +179,7 @@ class LinkLoginTests(unittest.TestCase):
         current = {'account_id': uuid4(), 'email': 'a@example.test', 'via_link': False, 'csrf': 'good', 'premium_until': None}
         token = paylink.sign('vk', 9, SECRET)
         with patch.object(identity, 'identity_account', return_value=uuid4()), \
+             patch.object(identity, 'link_nonce_used', return_value=False), \
              patch.object(identity, 'session', return_value=current), \
              patch.object(identity, 'platform_account') as found, \
              patch.object(identity, 'consume_link_nonce', return_value=True) as consumed, \
