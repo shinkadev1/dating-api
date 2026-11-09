@@ -132,7 +132,8 @@ def create_order(uid,plan,key,email,renew=False,via_link=False,consent_version=C
                 found=c.execute('SELECT id,email_verified FROM premium_accounts WHERE email=%s',(guest_email,)).fetchone()
                 if found and found['email_verified']: refuse('')
                 uid=found['id'] if found else c.execute('INSERT INTO premium_accounts(id,email,email_verified) VALUES(%s,%s,FALSE) RETURNING id',(uuid4(),guest_email)).fetchone()['id']
-                # The same browser pressing "pay" again gets its unfinished order back.
+            if session_digest and not renew:
+                # The same browser pressing "pay" again (e.g. back from ЮKassa) gets its unfinished order back.
                 mine=c.execute(f'SELECT o.* FROM premium_orders o WHERE o.account_id=%s AND o.created_session=%s AND {UNFINISHED} ORDER BY o.created_at DESC LIMIT 1',(uid,session_digest)).fetchone()
                 if mine: return mine
             c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(str(uid),))

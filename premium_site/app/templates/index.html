@@ -1,5 +1,8 @@
 {% extends 'base.html' %}{% block title %}{% if chosen %}Заказ{% else %}Тариф Premium{% endif %}{% endblock %}
 {% block content %}
+{% set base = '/checkout/' ~ link_token if link_token else '/' %}
+{% set linked = link_token or owner.account_id %}
+{% if leaving %}<p class="alert" role="status">Вы выйдете из текущего аккаунта на этой странице: оплата пойдёт профилю из ссылки.</p>{% endif %}
 {% if hint %}<p class="alert" role="alert">{{ hint }}</p>{% endif %}
 
 {% if not chosen %}
@@ -11,13 +14,13 @@
       <h2>{{ card.name }}</h2>
       <p class="plan-price">{{ card.price }} ₽ <span>за {{ card.days|days }}</span></p>
       <p class="muted small">{% if card.trial %}Пробный период доступен один раз. После {{ card.days }} дней — {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% else %}Затем {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% endif %}</p>
-      <a class="btn" href="/?plan={{ card.id }}">Выбрать</a>
+      <a class="btn" href="{{ base }}?plan={{ card.id }}">Выбрать</a>
     </section>
   {% endfor %}
   </div>
 {% else %}
   <section class="order">
-    <div class="order-head"><span>Заказ</span><a href="/">Другой тариф</a></div>
+    <div class="order-head"><span>Заказ</span><a href="{{ base }}">Другой тариф</a></div>
     <h2 class="order-title">{{ chosen.name }} — {{ chosen.days|days }}</h2>
     <div class="total"><span>К оплате</span><strong>{{ chosen.price }} ₽</strong></div>
     <p class="muted">Премиум начисляется сразу после подтверждения оплаты.</p>
@@ -26,12 +29,13 @@
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" name="plan" value="{{ chosen.id }}">
       <input type="hidden" name="request_key" value="{{ request_key }}">
-      {% if not owner.email %}<label class="field">Email{% if owner.account_id %} для чека{% endif %} <input name="email" type="email" autocomplete="email" maxlength="254"{% if not owner.account_id %} required{% endif %}></label>
-      <p class="muted small">{% if owner.account_id %}Покупка останется у профиля {{ profile or "из чата" }}.{% else %}Подписка будет привязана к этому email, на него придёт чек.{% endif %}</p>{% endif %}
+      {% if link_token %}<input type="hidden" name="token" value="{{ link_token }}">{% endif %}
+      {% if not owner.email %}<label class="field">Email{% if linked %} для чека{% endif %} <input name="email" type="email" autocomplete="email" maxlength="254"{% if not linked %} required{% endif %}></label>
+      <p class="muted small">{% if linked %}Покупка останется у профиля {{ profile or "из чата" }}.{% else %}Подписка будет привязана к этому email, на него придёт чек.{% endif %}</p>{% endif %}
       <label class="check"><input type="checkbox" name="consent_terms" value="yes" required>
         <span>Я согласен с <a href="https://chatwithyou.site/policy/" target="_blank" rel="noopener">политикой конфиденциальности</a>, <a href="https://chatwithyou.site/terms/" target="_blank" rel="noopener">условиями пользования</a> и <a href="https://chatwithyou.site/#premium" target="_blank" rel="noopener">тарифами</a> сервиса.</span></label>
       <label class="check"><input type="checkbox" name="consent_recurring" value="{{ consent_version }}" required>
-        <span>Я согласен на сохранение способа оплаты и автоматические списания: после {{ chosen.days }} дней — {{ chosen.renewal_price }} ₽ каждые {{ chosen.renewal_days }} дней автоматически до отключения. Отключить продление можно в любой момент, оплаченный срок сохраняется: {% if owner.account_id %}в аккаунте{% else %}на странице заказа или через support@chatwithyou.site{% endif %}.</span></label>
+        <span>Я согласен на сохранение способа оплаты и автоматические списания: после {{ chosen.days }} дней — {{ chosen.renewal_price }} ₽ каждые {{ chosen.renewal_days }} дней автоматически до отключения. Отключить продление можно в любой момент, оплаченный срок сохраняется: {% if linked %}в аккаунте{% else %}на странице заказа или через support@chatwithyou.site{% endif %}.</span></label>
       <button class="btn big" id="pay" disabled>Перейти к оплате →</button>
       <noscript><button class="btn big">Перейти к оплате →</button><style>#pay{display:none}</style></noscript>
     </form>

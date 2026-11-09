@@ -11,7 +11,7 @@ import psycopg
 from psycopg.conninfo import make_conninfo
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from app import billing, identity
+from app import billing, identity, paylink
 from app.main import app
 
 FORBIDDEN = [r'(?<![\d.])(399|199|99)(?![\d])', 'urle.su', 'PCI DSS', '24/7', 'Гарантия возврата', 'Завершите за']
@@ -125,6 +125,36 @@ class CheckoutTests(unittest.TestCase):
             refused = other.post('/checkout', data={'csrf': other_csrf, 'plan': 'trial', 'request_key': str(uuid4()), 'consent_terms': 'yes', 'consent_recurring': billing.CONSENT_VERSION, 'email': 'guest@example.test'})
         self.assertEqual(refused.status_code, 409); self.assertIn(billing.GUEST_REFUSED, refused.text)
         self.assertEqual(self.row('SELECT COUNT(*) n FROM premium_orders')['n'], 1)
+
+    def test_bot_link_pays_into_chat_profile_in_one_step(self):
+        token = paylink.sign('tg', 4242, 'p' * 32)
+        with patch.dict(os.environ, {'PREMIUM_LINK_SECRET': 'p' * 32}):
+            page = self.client.get('/checkout/' + token, params={'plan': 'trial'}).text
+            csrf = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+            data = {'csrf': csrf, 'plan': 'trial', 'request_key': str(uuid4()), 'consent_terms': 'yes', 'consent_recurring': billing.CONSENT_VERSION, 'token': token, 'email': ''}
+            response = self.client.post('/checkout', data=data, follow_redirects=False)
+            self.assertEqual(response.status_code, 303)
+            order = self.row('SELECT * FROM premium_orders')
+            self.assertEqual(response.headers['location'], 'https://yoomoney.example/checkout/' + str(order['id']))
+            self.assertEqual(order['account_id'], identity.identity_account('tg', 4242))
+            # The browser is now signed in to that chat profile and can see the order.
+            self.assertEqual(self.client.get('/orders/' + str(order['id'])).status_code, 200)
+            # The same browser may press again with the same link; another browser may not reuse it.
+            again = self.client.post('/checkout', data=dict(data, request_key=str(uuid4()), csrf=re.search(r'name="csrf" value="([^"]+)"', self.client.get('/checkout/' + token, params={'plan': 'trial'}).text).group(1)), follow_redirects=False)
+            self.assertEqual(self.row('SELECT COUNT(*) n FROM premium_orders')['n'], 1)
+            self.assertEqual(again.headers['location'], response.headers['location'])
+            with TestClient(app) as other:
+                other_csrf = re.search(r'name="csrf" value="([^"]+)"', other.get('/checkout/' + token, params={'plan': 'trial'}).text).group(1)
+                reused = other.post('/checkout', data=dict(data, csrf=other_csrf, request_key=str(uuid4())))
+            self.assertEqual(reused.status_code, 409); self.assertIn('Ссылка уже использована', reused.text)
+
+    def test_declined_consent_does_not_burn_bot_link(self):
+        token = paylink.sign('vk', 77, 'p' * 32)
+        with patch.dict(os.environ, {'PREMIUM_LINK_SECRET': 'p' * 32}):
+            csrf = re.search(r'name="csrf" value="([^"]+)"', self.client.get('/checkout/' + token, params={'plan': 'week'}).text).group(1)
+            response = self.client.post('/checkout', data={'csrf': csrf, 'plan': 'week', 'request_key': str(uuid4()), 'consent_terms': 'yes', 'token': token})
+        self.assertEqual(response.status_code, 422)
+        self.assertIsNone(identity.identity_account('vk', 77))
 
     def test_guest_requires_valid_email(self):
         self.assertEqual(self.post(plan='trial', email='').status_code, 422)

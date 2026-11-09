@@ -84,23 +84,30 @@ class LinkLoginTests(unittest.TestCase):
     def tearDown(self):
         self.client.close(); self.env.stop()
 
-    def test_get_never_consumes_or_creates_and_shows_continue(self):
+    def test_get_never_consumes_or_creates_and_shows_order_form(self):
         anonymous = {'account_id': None, 'email': None, 'via_link': False, 'csrf': 'c'}
+        token = paylink.sign('vk', 208891943, SECRET)
+        # Old links (?utm_content=) are forwarded to /checkout/<token>.
+        old = self.client.get('/', params={'utm_source': 'vk', 'utm_campaign': 'premium', 'utm_content': token, 'plan': 'week'}, follow_redirects=False)
+        self.assertEqual(old.status_code, 303); self.assertEqual(old.headers['location'], '/checkout/' + token + '?plan=week')
         with patch.object(identity, 'consume_link_nonce') as consumed, \
              patch.object(identity, 'platform_account') as found, \
              patch.object(identity, 'session', return_value=None), \
              patch.object(identity, 'new_session', return_value=('anon-token', anonymous)) as created:
             # A link preview crawler fetches the URL first.
-            response = self.client.get('/', params={'utm_source': 'vk', 'utm_campaign': 'premium', 'utm_content': paylink.sign('vk', 208891943, SECRET), 'plan': 'week'}, follow_redirects=False)
+            response = self.client.get('/checkout/' + token, params={'plan': 'week'}, follow_redirects=False)
+            plans = self.client.get('/checkout/' + token, follow_redirects=False)
         self.assertEqual(response.status_code, 200)
         self.assertIn('Премиум для профиля VK ••••1943', response.text)
-        self.assertIn('action="/auth/link"', response.text)
-        self.assertIn('<button>Продолжить</button>', response.text)
+        self.assertIn('action="/checkout"', response.text)
+        self.assertIn('name="token" value="%s"' % token, response.text)
         self.assertIn('name="plan" value="week"', response.text)
-        self.assertIn("history.replaceState(null,'','/')", response.text)
+        self.assertNotIn('Продолжить', response.text); self.assertNotIn('required>', response.text.split('name="email"')[1].split('</label>')[0])
+        self.assertIn('href="/checkout/%s?plan=trial"' % token, plans.text)
         self.assertNotIn('208891943', response.text)
         consumed.assert_not_called(); found.assert_not_called()
-        created.assert_called_once_with()  # only the anonymous session for the CSRF form
+        self.assertEqual(created.call_count, 2)  # only anonymous sessions for the CSRF form, nothing else
+        created.assert_called_with()
 
     def test_post_signs_in_once(self):
         anonymous = {'account_id': None, 'email': None, 'via_link': False, 'csrf': 'c', 'digest': 'd'}
@@ -175,7 +182,7 @@ class LinkLoginTests(unittest.TestCase):
              patch.object(identity, 'platform_account') as found, \
              patch.object(identity, 'consume_link_nonce', return_value=True) as consumed, \
              patch.object(identity, 'new_session') as created:
-            page = self.client.get('/', params={'utm_content': token}, follow_redirects=False)
+            page = self.client.get('/checkout/' + token, follow_redirects=False)
             self.assertEqual(page.status_code, 200)
             self.assertIn('Вы выйдете из текущего аккаунта', page.text)
             forged = self.client.post('/auth/link', data={'csrf': 'bad', 'token': token}, follow_redirects=False)
@@ -190,9 +197,9 @@ class LinkLoginTests(unittest.TestCase):
 
     def test_invalid_link_falls_back_without_account(self):
         with patch.object(identity, 'platform_account') as found:
-            response = self.client.get('/', params={'utm_content': paylink.sign('vk', 9, 'other' * 8)}, follow_redirects=False)
+            response = self.client.get('/checkout/' + paylink.sign('vk', 9, 'other' * 8), follow_redirects=False)
         self.assertEqual(response.status_code, 303)
-        self.assertEqual(response.headers['location'], '/')
+        self.assertEqual(response.headers['location'], '/?link=expired')
         self.assertNotIn('set-cookie', response.headers)
         found.assert_not_called()
 

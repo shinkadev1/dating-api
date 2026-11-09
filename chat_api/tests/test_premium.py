@@ -116,12 +116,13 @@ class RouteTests(unittest.TestCase):
         self.assertTrue(body["premium_active"])
         self.assertIsNotNone(body["premium_until"])
         url = urlsplit(body["url"])
-        self.assertEqual(f"{url.scheme}://{url.netloc}{url.path}", "https://pay.example.test/")
+        self.assertEqual(f"{url.scheme}://{url.netloc}", "https://pay.example.test")
+        self.assertTrue(url.path.startswith("/checkout/"))
+        token = url.path.removeprefix("/checkout/")
         query = parse_qs(url.query)
-        self.assertEqual(query["utm_source"], ["vk"])
-        self.assertEqual(query["utm_campaign"], ["premium"])
-        self.assertNotIn("77", body["url"].replace("https://pay.example.test/", "").split("utm_content=")[0])
-        self.assertEqual(premium_link.verify(query["utm_content"][0], SECRET), ("vk", 77))
+        self.assertEqual(query, {"utm_source": ["vk"], "utm_campaign": ["premium"]})
+        self.assertNotIn("77", url.query)
+        self.assertEqual(premium_link.verify(token, SECRET), ("vk", 77))
 
     def test_pay_link_inactive_unset_secret_and_foreign_platform(self) -> None:
         response = make_client(FakeChat(), FakeMedia()).get("/api/v1/peers/tg/bot/5/premium/link", headers=AUTH)

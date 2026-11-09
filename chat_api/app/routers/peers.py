@@ -208,17 +208,17 @@ async def store_media(
 async def premium_pay_link(peer: HumanPeer, chat: Chat, settings: AppSettings) -> PremiumLinkOut:
     """Адрес страницы оплаты для этого пользователя и текущий срок премиума.
 
-    Пользователь передаётся в `utm_content` подписанным и зашифрованным токеном (24 часа),
+    Пользователь передаётся в пути `/checkout/<токен>` подписанным и зашифрованным токеном (24 часа),
     открытого id в адресе нет. Страница оплаты по нему входит без email.
     Покупка привязана к аккаунту платформы, а не к боту: `bot_key` в токен не входит.
     """
     if not settings.premium_link_secret:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Оплата премиума не настроена")
     token = premium_link.sign(peer.platform, peer.user_id, settings.premium_link_secret)
-    query = urlencode({"utm_source": peer.platform, "utm_campaign": "premium", "utm_content": token})
+    query = urlencode({"utm_source": peer.platform, "utm_campaign": "premium"})
     until = await chat.premium_until(peer)
     return PremiumLinkOut(
-        url=f"{settings.pay_public_url}/?{query}",
+        url=f"{settings.pay_public_url}/checkout/{token}?{query}",
         premium_active=bool(until and until > datetime.now(timezone.utc)),
         premium_until=until,
     )

@@ -3,7 +3,8 @@ import ipaddress
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlencode
+from types import SimpleNamespace
+from urllib.parse import quote, urlencode
 from uuid import UUID, uuid4
 from fastapi import FastAPI, Form, Header, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -76,16 +77,33 @@ def offer(request:Request,plan:str='',utm_content:str='',link:str=''):
     selected=billing.ALIASES.get(plan,plan)
     if selected and selected not in billing.PLANS: raise HTTPException(422,'Неизвестный тариф')
     if utm_content:
-        # GET only shows a "Продолжить" page: link previews (Telegram/VK crawlers) fetch this URL, so
-        # nothing is consumed or created here except the anonymous session the CSRF form needs.
-        # Sign-in happens on POST /auth/link. Invalid links fall back to email login.
-        claimed=identity.verify_link_token(utm_content)
-        if not claimed: return RedirectResponse('/',303)
-        return page(request,'confirm.html',{'link_profile':identity.profile_text(*claimed),'token':utm_content,'plan':selected or ''})
-    hint='Ссылка уже использована, запросите новую в чате' if link=='used' else None
+        # Links issued before /checkout/<token> existed keep working.
+        if len(utm_content)>256: return RedirectResponse('/?link=expired',303)
+        return RedirectResponse('/checkout/'+quote(utm_content,safe='')+('?'+urlencode({'plan':selected}) if selected else ''),303)
+    hint=LINK_HINTS.get(link)
     cards=plan_cards()
     chosen=next((card for card in cards if card['id']==selected),None)
     return page(request,'index.html',{'cards':cards,'chosen':chosen,'consent_version':billing.CONSENT_VERSION,'request_key':str(uuid4()),'hint':hint})
+
+LINK_HINTS={'used':'Ссылка уже использована, запросите новую в чате','expired':'Ссылка из чата устарела, запросите новую в чате'}
+
+@app.get('/checkout/{token}')
+def link_offer(request:Request,token:str,plan:str=''):
+    """Personal link from the VK/Telegram bot: tariffs and the order form for that chat profile.
+
+    GET only shows the page: link previews (Telegram/VK crawlers) fetch this URL, so nothing is consumed
+    or created here except the anonymous session the CSRF form needs. The single-use token signs in on
+    POST /checkout, together with the order, and the premium goes to that chat profile."""
+    claimed=identity.verify_link_token(token) if len(token)<=256 else None
+    if not claimed: return RedirectResponse('/?link=expired',303)
+    selected=billing.ALIASES.get(plan,plan)
+    if selected and selected not in billing.PLANS: raise HTTPException(422,'Неизвестный тариф')
+    current=identity.session(request)
+    leaving=bool(current and current['account_id'] and identity.identity_account(*claimed)!=current['account_id'])
+    cards=plan_cards()
+    chosen=next((card for card in cards if card['id']==selected),None)
+    return page(request,'index.html',{'cards':cards,'chosen':chosen,'consent_version':billing.CONSENT_VERSION,'request_key':str(uuid4()),
+                                      'link_token':token,'profile':identity.profile_text(*claimed),'leaving':leaving})
 
 def known_plan(plan):
     """Normalized plan id from a form or query, or '' when it is absent or unknown."""
@@ -166,11 +184,22 @@ def cancel(request:Request,csrf:str=Form()):
     return RedirectResponse('/account',303)
 
 @app.post('/checkout')
-def checkout(request:Request,csrf:str=Form(),plan:str=Form(),request_key:UUID=Form(),consent_terms:str=Form(default=''),consent_recurring:str=Form(default=''),email:str=Form(default='',max_length=254)):
+def checkout(request:Request,csrf:str=Form(),plan:str=Form(),request_key:UUID=Form(),consent_terms:str=Form(default=''),consent_recurring:str=Form(default=''),email:str=Form(default='',max_length=254),token:str=Form(default='',max_length=256)):
     current=identity.csrf(request,csrf)
     # The button state in the page is only a convenience: both consents are enforced here.
     if consent_terms!='yes' or consent_recurring!=billing.CONSENT_VERSION:
         return notice(request,'Отметьте оба согласия: с политикой, условиями и тарифами, а также с автопродлением. Без них оплата невозможна.',422)
+    signed=None
+    if token:
+        # Personal link from the bot: sign in to that chat profile now, so the payment credits it.
+        result,signed=identity.link_login(request,token)
+        if result=='invalid': return notice(request,'Ссылка из чата недействительна или устарела; запросите новую у бота',409)
+        if result==identity.LINK_USED: return notice(request,LINK_HINTS['used'],409)
+        if signed: current=identity.session(SimpleNamespace(cookies={identity.COOKIE:signed}))
+    response=place_order(request,current,plan,request_key,consent_recurring,email)
+    return identity.cookie(response,signed) if signed else response
+
+def place_order(request,current,plan,request_key,consent_recurring,email):
     guest=not current['account_id']
     try:
         # A guest only types an email, no code: the purchase goes to the account of that email,
