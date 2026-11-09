@@ -3,11 +3,22 @@
 {% if hint %}<p class="alert" role="alert">{{ hint }}</p>{% endif %}
 
 {% if not owner.account_id %}
-  <p class="muted">Один аккаунт для сайта, VK и Telegram.{% if chosen %} Чтобы оформить тариф «{{ chosen.name }}», войдите по email.{% endif %}</p>
+  {% if chosen %}
+  <section class="order">
+    <div class="order-head"><span>Заказ</span><a href="/">Другой тариф</a></div>
+    <h2 class="order-title">{{ chosen.name }} — {{ chosen.days|days }}</h2>
+    <div class="total"><span>К оплате</span><strong>{{ chosen.price }} ₽</strong></div>
+    <p class="muted small">{% if chosen.trial %}Пробный период доступен один раз. {% endif %}После {{ chosen.days|days }} — {{ chosen.renewal_price }} ₽ каждые {{ chosen.renewal_days|days }}, продление можно отключить в любой момент.</p>
+    <p class="muted">Один аккаунт для сайта, VK и Telegram. Укажите email — после входа откроется оплата этого заказа.</p>
+  </section>
+  {% else %}
+  <p class="muted">Один аккаунт для сайта, VK и Telegram.</p>
+  {% endif %}
   <section class="panel">
     <h2>Вход по email</h2>
     <form method="post" action="/auth/request">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">{% if chosen %}
+      <input type="hidden" name="plan" value="{{ chosen.id }}">{% endif %}
       <label class="field">Email <input name="email" type="email" required autocomplete="email"></label>
       <button class="btn">Получить код</button>
     </form>
@@ -65,7 +76,8 @@
     <h2>Email для чека и управления подпиской</h2>
     <p class="muted small">Покупка останется у профиля {{ profile or "из чата" }}.</p>
     <form method="post" action="/auth/request">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="csrf" value="{{ csrf }}">{% if chosen %}
+      <input type="hidden" name="plan" value="{{ chosen.id }}">{% endif %}
       <label class="field">Email <input name="email" type="email" required autocomplete="email"></label>
       <button class="btn secondary">Получить код</button>
     </form>

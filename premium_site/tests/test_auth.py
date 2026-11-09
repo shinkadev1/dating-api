@@ -80,6 +80,24 @@ class AuthTests(unittest.TestCase):
     def give_code(self,owner,email,code='123456',attach=None):
         with billing.connect() as c:c.execute("INSERT INTO premium_email_codes(session_digest,email,code_hash,expires_at,attach_account) VALUES(%s,%s,%s,NOW()+INTERVAL '10 minutes',%s)",(owner['digest'],email,identity.code_hash(owner['digest'],email,code),attach))
         return code
+    def test_chosen_plan_survives_email_signin(self):
+        page=self.client.get('/?plan=trial')
+        self.assertEqual(page.status_code,200)
+        self.assertIn('К оплате',page.text);self.assertIn('name="plan" value="trial"',page.text)
+        owner=identity.session(SimpleNamespace(cookies=self.client.cookies))
+        with patch.object(identity,'request_code',return_value='sent'):
+            sent=self.client.post('/auth/request',data={'csrf':owner['csrf'],'email':'buyer@example.test','plan':'trial'})
+        self.assertIn('name="plan" value="trial"',sent.text)
+        self.give_code(owner,'buyer@example.test')
+        done=self.client.post('/auth/verify',data={'csrf':owner['csrf'],'code':'123456','plan':'trial'},follow_redirects=False)
+        self.assertEqual(done.status_code,303);self.assertEqual(done.headers['location'],'/?plan=trial')
+        order=self.client.get('/?plan=trial')
+        self.assertIn('action="/checkout"',order.text);self.assertIn('name="plan" value="trial"',order.text)
+    def test_signin_without_plan_opens_account(self):
+        self.client.get('/');owner=identity.session(SimpleNamespace(cookies=self.client.cookies))
+        self.give_code(owner,'plain@example.test')
+        done=self.client.post('/auth/verify',data={'csrf':owner['csrf'],'code':'123456','plan':'bogus'},follow_redirects=False)
+        self.assertEqual(done.headers['location'],'/account')
     def test_link_signin_checkout_exempt_mode(self):
         account,owner=self.link_session()
         self.assertTrue(owner['via_link']);self.assertIsNone(owner['email']);self.assertEqual(identity.profile_label(owner),'VK ••••42')

@@ -87,6 +87,11 @@ def offer(request:Request,plan:str='',utm_content:str='',link:str=''):
     chosen=next((card for card in cards if card['id']==selected),None)
     return page(request,'index.html',{'cards':cards,'chosen':chosen,'consent_version':billing.CONSENT_VERSION,'request_key':str(uuid4()),'hint':hint})
 
+def known_plan(plan):
+    """Normalized plan id from a form or query, or '' when it is absent or unknown."""
+    plan=billing.ALIASES.get(plan,plan)
+    return plan if plan in billing.PLANS else ''
+
 def link_redirect(plan,token):
     response=RedirectResponse('/'+('?'+urlencode({'plan':plan}) if plan else ''),303)
     return identity.cookie(response,token) if token else response
@@ -97,28 +102,30 @@ def confirm_link(request:Request,csrf:str=Form(),token:str=Form(max_length=256),
     result,value=identity.link_login(request,token)
     if result=='invalid': raise HTTPException(409,'Ссылка из чата недействительна или устарела; запросите новую у бота')
     if result==identity.LINK_USED: return RedirectResponse('/?link=used',303)
-    return link_redirect(billing.ALIASES.get(plan,plan) if billing.ALIASES.get(plan,plan) in billing.PLANS else '',value)
+    return link_redirect(known_plan(plan),value)
 
 @app.post('/auth/request')
-def request_code(request:Request,csrf:str=Form(),email:str=Form(),attach:str=Form(default='')):
+def request_code(request:Request,csrf:str=Form(),email:str=Form(),attach:str=Form(default=''),plan:str=Form(default='')):
     current=identity.csrf(request,csrf)
+    plan=known_plan(plan)  # The chosen tariff survives the email step so the buyer lands on its order form.
     try: result=identity.request_code(current,email,request.client.host if request.client else 'unknown',attach=attach=='yes')
     except HTTPException as exc:
         if exc.detail==identity.EMAIL_TAKEN: return page(request,'notice.html',{'message':exc.detail},409)
         raise
     if result=='confirm':
         # Explicit, CSRF-protected step: the email is attached to the chat profile that opened this page.
-        return page(request,'attach.html',{'email':identity.normalize_email(email)})
-    return page(request,'verify.html',{'message':'Код отправлен на email'})
+        return page(request,'attach.html',{'email':identity.normalize_email(email),'plan':plan})
+    return page(request,'verify.html',{'message':'Код отправлен на email','plan':plan})
 
 @app.post('/auth/verify')
-def verify(request:Request,csrf:str=Form(),code:str=Form()):
+def verify(request:Request,csrf:str=Form(),code:str=Form(),plan:str=Form(default='')):
     current=identity.csrf(request,csrf)
     try: token=identity.verify_code(current,code.strip())
     except HTTPException as exc:
         if exc.detail==identity.EMAIL_TAKEN: return page(request,'notice.html',{'message':exc.detail},409)
         raise
-    return identity.cookie(RedirectResponse('/account',303),token)
+    plan=known_plan(plan)
+    return identity.cookie(RedirectResponse('/?'+urlencode({'plan':plan}) if plan else '/account',303),token)
 
 @app.post('/auth/logout')
 def logout(request:Request,csrf:str=Form()):
