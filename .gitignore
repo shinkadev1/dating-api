@@ -1,4 +1,7 @@
 .env
+# Прод-настройки (.env.production → секрет ENV_FILE) и прочие .env.*, кроме образца.
+.env.*
+!.env.example
 data/
 .venv/
 venv/

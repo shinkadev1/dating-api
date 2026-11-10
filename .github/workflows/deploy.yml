@@ -22,12 +22,21 @@ jobs:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          ENV_FILE: ${{ secrets.ENV_FILE }}
         run: |
           missing=0
-          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DOCKERHUB_USERNAME DOCKERHUB_TOKEN; do
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DOCKERHUB_USERNAME DOCKERHUB_TOKEN ENV_FILE; do
             eval "value=\${$name}"
             if [ -z "$value" ]; then
               echo "Добавьте секрет $name"
+              missing=1
+            fi
+          done
+          # Все настройки приложения — только в ENV_FILE. Без этих ключей деплой не начинается:
+          # иначе update.sh взял бы старые токены из .env сервера или молча выключил оплату.
+          for key in CHAT_API_APP_TOKEN CLOUDFLARE_TUNNEL_TOKEN PAYMENTS_ENABLED; do
+            if ! printf '%s\n' "$ENV_FILE" | tr -d '\r' | grep -Eq "^[[:space:]]*${key}=.+"; then
+              echo "Добавьте ${key} в секрет ENV_FILE"
               missing=1
             fi
           done
@@ -93,12 +102,11 @@ jobs:
       - name: Encode env file
         id: envfile
         env:
+          # Единственный источник настроек и секретов приложения: env-файл (КЛЮЧ=значение по строке).
+          # Отдельные секреты GitHub — только для CI (сервер, Docker Hub).
           ENV_FILE: ${{ secrets.ENV_FILE }}
-          # Настройки оплаты отдельным env-файлом (секрет PAYMENTS_ENV). ENV_FILE идёт после него,
-          # поэтому одинаковый ключ в ENV_FILE важнее (update.sh берёт последнее значение).
-          PAYMENTS_ENV: ${{ secrets.PAYMENTS_ENV }}
         run: |
-          b64=$(printf '%s\n%s\n' "$PAYMENTS_ENV" "$ENV_FILE" | base64 -w 0)
+          b64=$(printf '%s\n' "$ENV_FILE" | base64 -w 0)
           echo "::add-mask::$b64"
           echo "b64=$b64" >> "$GITHUB_OUTPUT"
 
@@ -110,17 +118,13 @@ jobs:
           GIT_SHA: ${{ github.sha }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          CHAT_API_APP_TOKEN: ${{ secrets.CHAT_API_APP_TOKEN }}
-          CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
-          CHAT_API_TG_TOKEN: ${{ secrets.CHAT_API_TG_TOKEN }}
-          CHAT_ENGINE_TOKEN: ${{ secrets.CHAT_ENGINE_TOKEN }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
           command_timeout: 30m
-          envs: DEPLOY_PATH,ENV_FILE_B64,GIT_SHA,DOCKERHUB_USERNAME,DOCKERHUB_TOKEN,CHAT_API_APP_TOKEN,CLOUDFLARE_TUNNEL_TOKEN,CHAT_API_TG_TOKEN,CHAT_ENGINE_TOKEN
+          envs: DEPLOY_PATH,ENV_FILE_B64,GIT_SHA,DOCKERHUB_USERNAME,DOCKERHUB_TOKEN
           script: |
             set -eu
             if [ -n "${DEPLOY_PATH:-}" ]; then

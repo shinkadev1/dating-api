@@ -1,6 +1,6 @@
 # Запуск оплаты премиума: чек-лист
 
-Страница оплаты (premium_site, ЮKassa) поднимается тем же деплоем, что и Chat API: push в `master` → `.github/workflows/deploy.yml` собирает образ `dating-premium` → `deploy/update.sh` на сервере. Включается переключателем `PAYMENTS_ENABLED=true|false` в секрете `ENV_FILE`. Если его нет, оплата включается, когда в `ENV_FILE` (или в отдельных секретах GitHub) есть `PREMIUM_LINK_SECRET` и `YOOKASSA_SHOP_ID`. `.env` на сервере на это решение не влияет. Без оплаты всё работает как раньше, только контейнеров оплаты нет.
+Страница оплаты (premium_site, ЮKassa) поднимается тем же деплоем, что и Chat API: push в `master` → `.github/workflows/deploy.yml` собирает образ `dating-premium` → `deploy/update.sh` на сервере. Включается переключателем `PAYMENTS_ENABLED=true|false` в секрете `ENV_FILE`. Деплой не стартует, если `PAYMENTS_ENABLED` в `ENV_FILE` не задан (проверка в `deploy.yml`); при ручном запуске `update.sh` без него оплата включается, когда в `ENV_FILE` есть `PREMIUM_LINK_SECRET` и `YOOKASSA_SHOP_ID`. `.env` на сервере на это решение не влияет. Без оплаты всё работает как раньше, только контейнеров оплаты нет.
 
 До любых действий с контейнерами деплой проверяет секреты и останавливается с понятной ошибкой, если:
 - `PREMIUM_LINK_SECRET` или `PAY_AUTH_SECRET` короче 32 символов;
@@ -15,9 +15,17 @@
 2. Если на `pay.chatwithyou.site` раньше был custom domain или route старого Worker, удалите его (Workers & Pages → Worker → Settings → Domains & Routes), иначе запросы уйдут в Worker, а не в туннель.
 3. DNS-запись `pay` должна указывать на туннель: CNAME на `<id>.cfargotunnel.com`, Cloudflare создаёт её сам при добавлении hostname.
 
-## 2. Секреты PAYMENTS_ENV и ENV_FILE (GitHub → Settings → Secrets → Actions)
+## 2. Секрет ENV_FILE (GitHub → Settings → Secrets → Actions)
 
-Настройки оплаты удобно держать в отдельном секрете **`PAYMENTS_ENV`** — это обычный env-файл (`КЛЮЧ=значение` по строке). Деплой склеивает его с `ENV_FILE`, причём `ENV_FILE` идёт вторым: если ключ задан в обоих, побеждает `ENV_FILE`. Сейчас (2026-11-05) в `PAYMENTS_ENV` лежит тестовый магазин:
+С 2026-11-10 все настройки и секреты приложения — в одном секрете **`ENV_FILE`** (env-файл, `КЛЮЧ=значение` по строке): токены Chat API, `CLOUDFLARE_TUNNEL_TOKEN`, оплата. Отдельные секреты GitHub остались только для CI: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (и необязательные `DEPLOY_PATH`, `DEPLOY_PORT`). Секрет `PAYMENTS_ENV` больше не читается.
+
+Ведите файл локально как `vk-bot/.env.production` (он в `.gitignore`) и выкладывайте целиком:
+
+```bash
+gh secret set ENV_FILE --repo shinkadev1/dating-api < .env.production
+```
+
+Деплой не начнётся, если в `ENV_FILE` нет `CHAT_API_APP_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN` или `PAYMENTS_ENABLED`. Блок оплаты в нём:
 
 ```
 PAYMENTS_ENABLED=true
@@ -29,7 +37,7 @@ PREMIUM_LINK_SECRET=<случайные 48+ символов>
 PAY_AUTH_SECRET=<случайные 48+ символов>
 ```
 
-Переход на боевой магазин: отредактируйте `PAYMENTS_ENV` (или допишите те же ключи в `ENV_FILE`) — `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` боевые, `YOOKASSA_TEST_MODE=false`; для чеков `YOOKASSA_RECEIPT_MODE=receipt` и ключи ниже. Затем Actions → Deploy → Re-run. `PREMIUM_LINK_SECRET` и `PAY_AUTH_SECRET` не меняйте без нужды: смена разлогинит покупателей и сделает недействительными выданные ссылки.
+Переход на боевой магазин: в `.env.production` замените `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` боевые, `YOOKASSA_TEST_MODE=false`; для чеков `YOOKASSA_RECEIPT_MODE=receipt` и ключи ниже. Выложите файл в `ENV_FILE`, затем Actions → Deploy → Re-run. `PREMIUM_LINK_SECRET` и `PAY_AUTH_SECRET` не меняйте без нужды: смена разлогинит покупателей и сделает недействительными выданные ссылки.
 
 Без чеков (`exempt`) Resend не обязателен: покупатель входит по ссылке из бота, вход по email отвечает «Письмо не отправлено». В режиме `receipt` нужны `RESEND_API_KEY` и `AUTH_MAIL_FROM` — чеку нужен email.
 
