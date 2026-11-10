@@ -19,13 +19,13 @@ CONSENT_VERSION = '2026-11-04'
 RENEWAL = {'trial':'week'}
 
 def recurring():
-    """Автоплатежи магазина (YOOKASSA_RECURRING). Выключены: карта не сохраняется, автосписаний и пробного тарифа нет,
+    """Автоплатежи магазина (YOOKASSA_RECURRING). Выключены: карта не сохраняется, автосписаний нет, все тарифы (и пробный) — разовая оплата,
     продлить можно заранее — дни добавляются к сроку. На сервере по умолчанию false (deploy/update.sh)."""
     return os.getenv('YOOKASSA_RECURRING','true').strip().lower()=='true'
 
 def offered(plan):
-    """Тариф продаётся сейчас: пробный — только вместе с автопродлением."""
-    return plan in PLANS and (plan!='trial' or recurring())
+    """Тариф продаётся сейчас. Пробный продаётся и без автопродления: 1 ₽ за 3 дня, один раз на аккаунт."""
+    return plan in PLANS
 
 def renewal_terms(plan):
     """(plan_id, price in RUB, days) of the automatic charge that follows `plan`."""

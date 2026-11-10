@@ -364,13 +364,14 @@ class NoRecurringCheckoutTests(CheckoutTests):
     def tearDown(self):
         self.off.stop(); super().tearDown()
 
-    def test_plans_are_one_off_and_trial_hidden(self):
+    def test_plans_are_one_off_including_trial(self):
         self.login()
         html = self.client.get('/').text
-        self.assertNotIn('plan=trial', html); self.assertNotIn('Пробный', html)
-        self.assertEqual(html.count('Разовая оплата, без автопродления.'), 3)
+        self.assertIn('plan=trial', html); self.assertIn('Пробный период доступен один раз.', html)
+        self.assertEqual(html.count('Разовая оплата, без автопродления.'), 4)
         self.assertNotIn('каждые', html)
-        self.assertNotIn('name="plan" value="trial"', self.client.get('/?plan=trial').text)
+        self.assertIn('name="plan" value="trial"', self.client.get('/?plan=trial').text)
+        self.assertEqual(self.post(plan='trial', consent_recurring=None).status_code, 303)
 
     def test_recurring_consent_shown_but_optional(self):
         self.login()

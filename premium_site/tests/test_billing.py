@@ -270,10 +270,14 @@ class NoRecurringTests(PostgresTests):
         second=self.row('SELECT premium_until FROM premium_accounts')['premium_until']
         self.assertAlmostEqual((second-first).total_seconds()/86400,7,places=3)
 
-    def test_trial_not_offered(self):
-        self.assertFalse(billing.offered('trial'));self.assertTrue(billing.offered('week'))
-        with self.assertRaises(HTTPException) as refused: self.create('trial')
-        self.assertEqual(refused.exception.status_code,422)
+    def test_trial_is_one_off_and_only_once(self):
+        self.assertTrue(billing.offered('trial'))
+        order=self.create('trial')
+        self.assertFalse(order['payload']['save_payment_method'])
+        billing.process(order['id'],self.provider)
+        self.assertTrue(self.row('SELECT trial_used FROM premium_accounts')['trial_used'])
+        self.assertFalse(self.row('SELECT auto_renew FROM premium_subscriptions')['auto_renew'])
+        with self.assertRaises(HTTPException): self.create('trial')
 
     def test_tick_never_charges_previously_saved_cards(self):
         self.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,auto_renew,method_id,period_end) VALUES(%s,'week','x@example.test','v',TRUE,'old-test-card',NOW()-INTERVAL '1 hour')",(self.account,))

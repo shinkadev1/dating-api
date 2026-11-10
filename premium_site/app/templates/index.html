@@ -13,7 +13,7 @@
     <section class="plan">
       <h2>{{ card.name }}</h2>
       <p class="plan-price">{{ card.price }} ₽ <span>за {{ card.days|days }}</span></p>
-      <p class="muted small">{% if not recurring %}Разовая оплата, без автопродления.{% elif card.trial %}Пробный период доступен один раз. После {{ card.days }} дней — {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% else %}Затем {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% endif %}</p>
+      <p class="muted small">{% if not recurring %}{% if card.trial %}Пробный период доступен один раз. {% endif %}Разовая оплата, без автопродления.{% elif card.trial %}Пробный период доступен один раз. После {{ card.days }} дней — {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% else %}Затем {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% endif %}</p>
       <a class="btn" href="{{ base }}?plan={{ card.id }}">Выбрать</a>
     </section>
   {% endfor %}
