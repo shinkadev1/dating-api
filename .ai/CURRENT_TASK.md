@@ -1,5 +1,9 @@
 # Текущая задача
 
+## Кабинет подписки (vk-bot) — 2026-11-10
+
+Задача LoopOS 2026-11-10-account-page, ветка `loop/account-page` (worktree `.worktrees/vk-bot-account-page`). Статус: реализовано, локальный коммит, ждёт ревью; push, merge и деплой не выполнялись. Проверки — в [STATE.md](STATE.md). Следующий шаг: ревью; выкладка vk-bot до Worker и landing; `CHAT_API_APP_TOKEN` должен быть в `.env` сервера.
+
 ## Напоминания давно не заходившим — 2026-11-10
 
 Задача LoopOS 2026-11-10-reminders, ветка `loop/reminders` (worktree `.worktrees/vk-bot-reminders`). Статус: реализовано, ждёт ревью; push, merge и деплой не выполнялись. Выпускается выключенным (`reminders/settings.py: ENABLED = False`). Проверки — в [STATE.md](STATE.md). Следующий шаг: ревью, затем по правилам цикла merge свежего origin/master и деплой; включение напоминаний — отдельным решением (финальный текст, при желании `photo.jpg`, `ENABLED = True`).

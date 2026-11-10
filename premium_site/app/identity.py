@@ -253,6 +253,15 @@ def service_auth(platform,authorization):
     if len(set(configured))!=len(configured): raise HTTPException(503,'Сервисные токены платформ должны различаться')
     if len(expected)<32 or not hmac.compare_digest(token,expected): raise HTTPException(403,'Доступ запрещён')
 
+def web_service_auth(authorization):
+    """Site Worker -> premium_site: PREM_SERVICE_WEB_TOKEN (>=32) or the existing CHAT_API_APP_TOKEN (>=16)."""
+    token=(authorization or '').removeprefix('Bearer ')
+    ok=False
+    for name,minimum in (('PREM_SERVICE_WEB_TOKEN',32),('CHAT_API_APP_TOKEN',16)):
+        expected=os.getenv(name,'')
+        if len(expected)>=minimum and hmac.compare_digest(token.encode(),expected.encode()): ok=True
+    if not ok: raise HTTPException(403,'Доступ запрещён')
+
 def peer_status(platform,user_id):
     """Same answer Chat API enforces: bot_users.premium_until (synced from the account) wins when longer."""
     with connect() as c:

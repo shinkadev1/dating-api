@@ -1,6 +1,7 @@
 """Postgres-backed YooKassa orders. All methods are synchronous for FastAPI def handlers."""
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -68,6 +69,9 @@ def schema():
             c.execute('ALTER TABLE premium_subscriptions ALTER COLUMN email DROP NOT NULL')
             # A subscription started from an email session cannot be cancelled from a chat-link session.
             c.execute('ALTER TABLE premium_subscriptions ADD COLUMN IF NOT EXISTS created_via_link BOOLEAN NOT NULL DEFAULT FALSE')
+            # Card shown in the site account: only the last four digits and the brand, never the full number.
+            c.execute('ALTER TABLE premium_subscriptions ADD COLUMN IF NOT EXISTS card_last4 TEXT')
+            c.execute('ALTER TABLE premium_subscriptions ADD COLUMN IF NOT EXISTS card_brand TEXT')
             from . import notify
             notify.schema(c)
 
@@ -210,7 +214,10 @@ def process(order_id,provider=None):
                     if payment.get('paid') is not True: raise HTTPException(409,'Платёж не оплачен')
                     until=c.execute("UPDATE premium_accounts SET premium_until=GREATEST(COALESCE(premium_until,NOW()),NOW())+(%s * INTERVAL '1 hour'),trial_used=trial_used OR %s WHERE id=%s RETURNING premium_until",(row['period_hours'],row['plan_id']=='trial',uid)).fetchone()['premium_until']
                     method=payment.get('payment_method',{}); saved=method.get('saved') is True and bool(method.get('id'))
-                    c.execute("UPDATE premium_subscriptions SET period_end=%s,plan_id=%s,trial_used=trial_used OR %s,method_id=CASE WHEN auto_renew AND %s THEN %s ELSE NULL END,auto_renew=auto_renew AND %s WHERE account_id=%s",(until,renewal_terms(row['plan_id'])[0],row['plan_id']=='trial',saved,method.get('id') if saved else None,saved,uid))
+                    card=method.get('card'); card=card if isinstance(card,dict) else {}
+                    last4=card.get('last4'); last4=last4 if isinstance(last4,str) and re.fullmatch(r'\d{4}',last4) else None
+                    brand=card.get('card_type'); brand=brand[:32] if isinstance(brand,str) and brand else None
+                    c.execute("UPDATE premium_subscriptions SET period_end=%s,plan_id=%s,trial_used=trial_used OR %s,method_id=CASE WHEN auto_renew AND %s THEN %s ELSE NULL END,card_last4=CASE WHEN auto_renew AND %s THEN %s ELSE NULL END,card_brand=CASE WHEN auto_renew AND %s THEN %s ELSE NULL END,auto_renew=auto_renew AND %s WHERE account_id=%s",(until,renewal_terms(row['plan_id'])[0],row['plan_id']=='trial',saved,method.get('id') if saved else None,saved,last4,saved,brand,saved,uid))
                     c.execute("UPDATE premium_orders SET status='paid',applied_at=NOW() WHERE id=%s",(order_id,))
                     sync_bot_users(c,uid)
                     from . import notify
@@ -245,7 +252,49 @@ def cancel(account_id):
     with connect() as c:
         with c.transaction():
             c.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(str(account_id),))
-            c.execute('UPDATE premium_subscriptions SET auto_renew=FALSE,method_id=NULL WHERE account_id=%s',(account_id,))
+            c.execute('UPDATE premium_subscriptions SET auto_renew=FALSE,method_id=NULL,card_last4=NULL,card_brand=NULL WHERE account_id=%s',(account_id,))
+
+def plan_info(plan_id):
+    plan_id=ALIASES.get(plan_id,plan_id)
+    plan=PLANS.get(plan_id)
+    return plan_id,(plan[0] if plan else plan_id),(plan[2] if plan else None),(plan[1] if plan else None)
+
+def web_account(email):
+    """Read-only account state for the site cabinet. Never creates anything; unknown email -> empty answer."""
+    from .identity import normalize_email
+    email=normalize_email(email)
+    with connect() as c:
+        acc=c.execute('SELECT id,email,premium_until FROM premium_accounts WHERE email=%s',(email,)).fetchone()
+        if not acc: return {'email':None,'premium_until':None,'premium_active':False,'subscription':None,'payments':[]}
+        until=acc['premium_until']
+        result={'email':acc['email'],'premium_until':until.isoformat() if until else None,'premium_active':bool(until and until>datetime.now(timezone.utc)),'subscription':None,'payments':[]}
+        sub=c.execute('SELECT * FROM premium_subscriptions WHERE account_id=%s',(acc['id'],)).fetchone()
+        if sub:
+            last=c.execute("SELECT plan_id FROM premium_orders WHERE account_id=%s AND status='paid' ORDER BY applied_at DESC NULLS LAST,created_at DESC LIMIT 1",(acc['id'],)).fetchone()
+            first=c.execute("SELECT applied_at FROM premium_orders WHERE account_id=%s AND status='paid' AND NOT (COALESCE(payload,'{}'::jsonb) ? 'payment_method_id') ORDER BY applied_at DESC NULLS LAST,created_at DESC LIMIT 1",(acc['id'],)).fetchone()
+            plan_id,plan_name,price,days=plan_info(last['plan_id'] if last and last['plan_id'] else sub['plan_id'])
+            nxt=None
+            if sub['auto_renew'] and sub['method_id'] and sub['period_end']:
+                rid,amount,_=renewal_terms(sub['plan_id'])
+                nxt={'at':sub['period_end'].isoformat(),'amount_rub':amount,'plan_name':PLANS[rid][0]}
+            result['subscription']={'plan_id':plan_id,'plan_name':plan_name,'price_rub':price,'days':days,
+                'auto_renew':bool(sub['auto_renew']),'card_attached':bool(sub['method_id']),'card_last4':sub['card_last4'],'card_brand':sub['card_brand'],
+                'period_end':sub['period_end'].isoformat() if sub['period_end'] else None,
+                'started_at':first['applied_at'].isoformat() if first and first['applied_at'] else None,'next_charge':nxt}
+        rows=c.execute("SELECT created_at,plan_id,amount_rub,status FROM premium_orders WHERE account_id=%s AND status IN ('paid','failed') ORDER BY created_at DESC LIMIT 100",(acc['id'],)).fetchall()
+        for r in rows:
+            pid,name,_,_=plan_info(r['plan_id'])
+            result['payments'].append({'created_at':r['created_at'].isoformat(),'plan_id':pid,'plan_name':name,'amount_rub':r['amount_rub'],'status':r['status']})
+        return result
+
+def web_cancel(email):
+    from .identity import normalize_email
+    email=normalize_email(email)
+    with connect() as c:
+        row=c.execute('SELECT a.id FROM premium_accounts a JOIN premium_subscriptions s ON s.account_id=a.id WHERE a.email=%s',(email,)).fetchone()
+    if not row: raise HTTPException(409,'Нет подписки для отмены')
+    cancel(row['id'])
+    return web_account(email)
 
 def webhook(payment_id,provider=None):
     from uuid import UUID

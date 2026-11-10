@@ -274,6 +274,19 @@ def claim(platform:str,user_id:int,body:Claim,authorization:str|None=Header(defa
     if user_id<=0: raise HTTPException(422,'Некорректный ID')
     return identity.claim(platform,user_id,body.code)
 
+class WebEmail(BaseModel):
+    email:str=Field(max_length=254)
+
+@app.post('/internal/web/account')
+def web_account(body:WebEmail,authorization:str|None=Header(default=None)):
+    identity.web_service_auth(authorization)
+    return billing.web_account(identity.normalize_email(body.email))
+
+@app.post('/internal/web/account/cancel')
+def web_account_cancel(body:WebEmail,authorization:str|None=Header(default=None)):
+    identity.web_service_auth(authorization)
+    return billing.web_cancel(identity.normalize_email(body.email))
+
 class Notification(BaseModel):
     type:str
     event:str

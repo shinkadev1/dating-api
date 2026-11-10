@@ -1,5 +1,9 @@
 # Состояние vk-bot
 
+## Ветка loop/account-page, 2026-11-10
+
+Worktree `.worktrees/vk-bot-account-page`, от origin/master 274cee9. Изменены `premium_site/app/{billing,identity,main}.py`, `docker-compose.payments.yml`, `premium_site/DEPLOY.md` (раздел 11), добавлен `premium_site/tests/test_web_account.py`. Проверки (venv Python 3.10, pgserver): `pytest tests -q -rs` в `premium_site` — 89 passed, 0 skipped (было 75); `compileall premium_site/app` без ошибок; `docker compose -f docker-compose.yml -f docker-compose.payments.yml config -q` (с подставными значениями обязательных переменных окружения) и `git diff --check origin/master` без ошибок. Не проверялось: реальная ЮKassa (форма `payment_method.card` в ответе взята из документации), вызов из Worker, деплой. У подписок, оплаченных до выкладки, `card_last4` пуст до следующего платежа.
+
 ## Ветка loop/dialog-history, 2026-11-10
 
 Worktree `.worktrees/vk-bot-dialog-history`, от origin/master 21a2a42. Добавлена история диалогов: `004_dialog_history.sql` (dialogs, messages, message_archives, chat_sessions.dialog_id), запись реплик в `ChatService`, суточный архиватор в S3 (`services/archive.py`, lock 7_310_003), настройки `MESSAGES_HOT_DAYS`/`MESSAGES_ARCHIVE_ENABLED`, счётчики в `deploy/update.sh` и `server-logs.yml`. Тесты без базы (`test_dialog_history.py`, `test_archive.py`) проходят вместе с прежними. Интеграционный `test_dialog_history_db.py` прогнан на временном Postgres 17 (Docker): весь набор chat_api — 55 passed, 0 skipped; повторный ensure_schema на непустой базе без ошибок, REVOKE снимает права anon/authenticated. На Windows тесту нужен селекторный цикл событий (задан в файле). Деплой не выполнялся.
