@@ -17,7 +17,7 @@
 
 ## 2. Секрет ENV_FILE (GitHub → Settings → Secrets → Actions)
 
-С 2026-11-10 все настройки и секреты приложения — в одном секрете **`ENV_FILE`** (env-файл, `КЛЮЧ=значение` по строке): токены Chat API, `CLOUDFLARE_TUNNEL_TOKEN`, оплата. Отдельные секреты GitHub остались только для CI: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (и необязательные `DEPLOY_PATH`, `DEPLOY_PORT`). Секрет `PAYMENTS_ENV` больше не читается.
+С 2026-11-10 все настройки и секреты приложения — в одном секрете **`ENV_FILE`** (env-файл, `КЛЮЧ=значение` по строке): токены Chat API, `CLOUDFLARE_TUNNEL_TOKEN`, оплата. Отдельные секреты GitHub остались только для CI: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (и необязательные `DEPLOY_PATH`, `DEPLOY_PORT`). Секреты `PAYMENTS_ENV`, `CHAT_API_APP_TOKEN`, `CHAT_API_TG_TOKEN`, `CHAT_ENGINE_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN` больше не читаются: перенесите их значения в `.env.production` до удаления. Ключа, которого нет в `ENV_FILE`, деплой ищет ещё в `.env` сервера, поэтому отзывать ключ надо заменой значения, а не удалением строки.
 
 Ведите файл локально как `vk-bot/.env.production` (он в `.gitignore`) и выкладывайте целиком:
 

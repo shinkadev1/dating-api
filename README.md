@@ -149,8 +149,12 @@ docker compose up --build
 Бот ВК запускается отдельно из репозитория `dating-bot-vk` и получает события по WebSocket.
 Ему нужен тот же `CHAT_API_SERVICE_TOKEN`. Бот Telegram — репозиторий `dating-bot-tg`, на сервере chat-engine.
 
-Секреты GitHub репозитория `aStormspirit/dating-api`:
+Секреты GitHub репозитория `dating-api` — только для CI: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`,
+`DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (необязательно `DEPLOY_PATH`, `DEPLOY_PORT`) и `ENV_FILE`.
+Все настройки приложения — ключи внутри `ENV_FILE` (локально `.env.production`, выкладка
+`gh secret set ENV_FILE < .env.production`, подробнее — `premium_site/DEPLOY.md`, раздел 2), в том числе:
 
+- `CHAT_API_APP_TOKEN`, `CLOUDFLARE_TUNNEL_TOKEN`, `PAYMENTS_ENABLED` — обязательны, без них деплой не начнётся
 - `CHAT_API_TG_TOKEN` — токен Chat API только для пользователей tg; тот же секрет в `dating-bot-tg`
 - `CHAT_ENGINE_TOKEN` — `API_TOKEN` chat-engine, для `engine_bridge`
 

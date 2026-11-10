@@ -55,7 +55,7 @@ ensure_secret() {
   set_env "$key" "$value"
 }
 
-# Ключ, который знает не только сервер: из отдельного секрета GitHub, из ENV_FILE или из .env.
+# Ключ, который знает не только сервер: из окружения (ручной запуск), из ENV_FILE или из .env.
 # Код возврата 1, если его нет нигде.
 optional_secret() {
   key=$1
@@ -75,7 +75,7 @@ optional_secret() {
 # То же, но без ключа деплой останавливается.
 require_secret() {
   if ! optional_secret "$1"; then
-    echo "Добавьте $1 в секреты GitHub или в секрет ENV_FILE." >&2
+    echo "Добавьте $1 в секрет ENV_FILE." >&2
     exit 1
   fi
 }
@@ -87,7 +87,7 @@ drop_env() {
   chmod 600 .env
 }
 
-# Значение из окружения деплоя (секреты GitHub) или ENV_FILE, без .env сервера и без записи.
+# Значение из окружения (ручной запуск) или ENV_FILE, без .env сервера и без записи.
 deploy_value() {
   key=$1
   eval "value=\${$key:-}"
