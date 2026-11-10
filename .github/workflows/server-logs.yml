@@ -1,6 +1,6 @@
 name: Server logs
 
-# Одноразово: снять премиум с тестовых аккаунтов владельца (по просьбе пользователя 2026-11-10),
+# Одноразово: снять премиум и пробный с VK-аккаунта владельца (по просьбе пользователя 2026-11-10, второй раз),
 # чтобы заново проверить покупку. Ветка diag/premium-reset, в master не вливается.
 
 on:
@@ -27,8 +27,8 @@ jobs:
             \set ON_ERROR_STOP on
             BEGIN;
             CREATE TEMP TABLE acc ON COMMIT DROP AS
-              SELECT DISTINCT account_id id FROM premium_orders
-              WHERE status='paid' AND left(id::text,8) IN ('cc9e85f9','640b926f','eb45d7f2') AND account_id IS NOT NULL;
+              SELECT DISTINCT account_id id FROM premium_identities WHERE platform='vk' AND user_id=208891943;
+            SELECT 'orders' t, left(o.id::text,8) o, o.plan_id, o.amount_rub, o.status, o.provider_status, o.created_at FROM premium_orders o JOIN acc ON acc.id=o.account_id ORDER BY o.created_at DESC LIMIT 10;
             CREATE TEMP TABLE bu ON COMMIT DROP AS
               SELECT i.platform, i.user_id FROM premium_identities i JOIN acc ON acc.id=i.account_id
               UNION SELECT 'vk', 208891943;
