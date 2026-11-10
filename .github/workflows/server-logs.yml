@@ -1,5 +1,8 @@
 name: Server logs
 
+# Одноразово: снять премиум с тестовых аккаунтов владельца (по просьбе пользователя 2026-11-10),
+# чтобы заново проверить покупку. Ветка diag/premium-reset, в master не вливается.
+
 on:
   workflow_dispatch:
 
@@ -7,7 +10,7 @@ jobs:
   logs:
     runs-on: ubuntu-latest
     steps:
-      - name: Read bot container logs
+      - name: Reset owner test premium
         uses: appleboy/ssh-action@v1.2.2
         env:
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
@@ -20,67 +23,26 @@ jobs:
           envs: DEPLOY_PATH
           script: |
             set -eu
-            if [ -n "${DEPLOY_PATH:-}" ]; then
-              APP_DIR="$DEPLOY_PATH"
-            else
-              APP_DIR="${HOME}/dating-bot"
-            fi
-            cd "$APP_DIR"
-            echo '--- TOKENS ---'
-            awk -F= '
-              /^CHAT_API_APP_TOKEN=/ { print "CHAT_API_APP_TOKEN", (length($2) > 0 ? "set" : "empty") }
-              /^CLOUDFLARE_TUNNEL_TOKEN=/ { print "CLOUDFLARE_TUNNEL_TOKEN length", length($0) - length("CLOUDFLARE_TUNNEL_TOKEN=") }
-            ' .env
-            docker ps -a --filter name=vk- --format 'table {{.Names}}\t{{.Status}}'
-            echo '--- CLOUDFLARED ---'
-            docker logs vk-bot-cloudflared --tail 60 2>&1 || true
-            echo '--- CHAT API ---'
-            docker logs vk-chat-api --tail 60 2>&1 || true
-            echo '--- ENGINE BRIDGE ---'
-            docker logs vk-engine-bridge --tail 80 2>&1 || true
-            echo '--- LOGS ---'
-            docker logs vk-bot --tail 200 2>&1 || true
-            echo '--- PREMIUM WEB ---'
-            docker logs vk-premium-web --tail 80 2>&1 | grep -v 'GET /health' || true
-            echo '--- PREMIUM SCHEDULER ---'
-            docker logs vk-premium-scheduler --tail 80 2>&1 || true
-            echo '--- PREMIUM STATE (read-only, no emails or full ids) ---'
-            docker exec vk-bot-db psql -U supabase_admin -h localhost -v ON_ERROR_STOP=0 -c "
-              SELECT left(o.id::text,8) id, o.plan_id, o.status, o.provider_status, o.payment_id IS NOT NULL has_payment,
-                     o.created_at, o.applied_at, a.premium_until, a.email IS NOT NULL has_email,
-                     (SELECT string_agg(i.platform||':'||right(i.user_id::text,4),',') FROM premium_identities i WHERE i.account_id=o.account_id) identities,
-                     (SELECT string_agg(b.platform||':'||right(b.user_id::text,4)||'='||coalesce(b.premium_until::text,'null'),',') FROM premium_identities i JOIN bot_users b ON b.platform=i.platform AND b.user_id=i.user_id WHERE i.account_id=o.account_id) bot_users
-              FROM premium_orders o LEFT JOIN premium_accounts a ON a.id=o.account_id ORDER BY o.created_at DESC LIMIT 8;" 2>&1 || true
-            docker exec vk-bot-db psql -U supabase_admin -h localhost -c "SELECT id, renewal, created_at, sent_at FROM premium_notices ORDER BY id DESC LIMIT 5" 2>&1 || true
-            docker exec vk-premium-scheduler python -c "import redis,os;print('redis ping',redis.Redis.from_url(os.environ['REDIS_URL']).ping())" 2>&1 | tail -2 || true
-
-  telegram-logs:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check secrets
-        id: check
-        env:
-          TG_DEPLOY_HOST: ${{ secrets.TG_DEPLOY_HOST }}
-          TG_DEPLOY_USER: ${{ secrets.TG_DEPLOY_USER }}
-          TG_DEPLOY_SSH_KEY: ${{ secrets.TG_DEPLOY_SSH_KEY }}
-        run: |
-          if [ -z "$TG_DEPLOY_HOST" ] || [ -z "$TG_DEPLOY_USER" ] || [ -z "$TG_DEPLOY_SSH_KEY" ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Read Telegram bot logs
-        if: steps.check.outputs.ready == 'true'
-        uses: appleboy/ssh-action@v1.2.2
-        with:
-          host: ${{ secrets.TG_DEPLOY_HOST }}
-          username: ${{ secrets.TG_DEPLOY_USER }}
-          key: ${{ secrets.TG_DEPLOY_SSH_KEY }}
-          port: ${{ secrets.TG_DEPLOY_PORT || 22 }}
-          command_timeout: 5m
-          script: |
-            set -eu
-            docker ps -a --filter name=dating-tg-bot --format 'table {{.Names}}\t{{.Status}}'
-            echo '--- TG BOT ---'
-            docker logs dating-tg-bot --tail 200 2>&1 || true
+            cat > /tmp/premium-reset.sql <<'SQL'
+            \set ON_ERROR_STOP on
+            BEGIN;
+            CREATE TEMP TABLE acc ON COMMIT DROP AS
+              SELECT DISTINCT account_id id FROM premium_orders
+              WHERE status='paid' AND left(id::text,8) IN ('cc9e85f9','640b926f','eb45d7f2') AND account_id IS NOT NULL;
+            CREATE TEMP TABLE bu ON COMMIT DROP AS
+              SELECT i.platform, i.user_id FROM premium_identities i JOIN acc ON acc.id=i.account_id
+              UNION SELECT 'vk', 208891943;
+            SELECT 'accounts' what, count(*) FROM acc;
+            SELECT 'before' t, platform||':'||right(user_id::text,4) u, is_premium, premium_until FROM bot_users WHERE (platform,user_id) IN (SELECT platform,user_id FROM bu);
+            UPDATE premium_accounts SET premium_until=NULL, trial_used=FALSE WHERE id IN (SELECT id FROM acc);
+            UPDATE premium_subscriptions SET auto_renew=FALSE, method_id=NULL, period_end=NULL, trial_used=FALSE WHERE account_id IN (SELECT id FROM acc);
+            -- дата в прошлом, а не NULL: 002_premium_grant.sql при старте выдаёт 30 дней строкам с NULL
+            UPDATE bot_users SET is_premium=FALSE, premium_until=NOW()-INTERVAL '1 minute', updated_at=NOW()
+              WHERE (platform,user_id) IN (SELECT platform,user_id FROM bu);
+            SELECT 'after' t, platform||':'||right(user_id::text,4) u, is_premium, premium_until, premium_until>NOW() active FROM bot_users WHERE (platform,user_id) IN (SELECT platform,user_id FROM bu);
+            SELECT 'accounts after' t, premium_until, trial_used FROM premium_accounts WHERE id IN (SELECT id FROM acc);
+            COMMIT;
+            SELECT 'still active vk/tg' t, platform||':'||right(user_id::text,4) u, premium_until FROM bot_users WHERE premium_until>NOW();
+            SQL
+            docker exec -i vk-bot-db psql -U supabase_admin -h localhost < /tmp/premium-reset.sql
+            rm -f /tmp/premium-reset.sql
