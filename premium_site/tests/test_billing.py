@@ -283,3 +283,19 @@ class NoRecurringTests(PostgresTests):
 
 # Наследуем только setUp/хелперы: тесты родителя рассчитаны на включённые автоплатежи.
 for _name in [n for n in vars(PostgresTests) if n.startswith('test_') and n not in vars(NoRecurringTests)]: setattr(NoRecurringTests,_name,None)
+
+
+class NoRecurringPendingTests(NoRecurringTests):
+    def test_pending_renewal_from_before_switch_is_closed_without_charge(self):
+        self.off.stop()
+        order=self.create('week');billing.process(order['id'],self.provider)
+        self.execute("UPDATE premium_subscriptions SET period_end=NOW()-INTERVAL '1 hour'")
+        renewal=billing.create_order(self.account,'week',uuid4(),'x@example.test',True)
+        self.assertIn('payment_method_id',renewal['payload'])
+        self.off.start();calls=len(self.provider.calls)
+        row=billing.process(renewal['id'],self.provider)
+        self.assertEqual((row['status'],row['provider_status']),('failed','rejected'))
+        self.assertEqual(len(self.provider.calls),calls)
+        self.assertFalse(self.row('SELECT auto_renew FROM premium_subscriptions')['auto_renew'])
+
+for _name in [n for n in vars(NoRecurringTests) if n.startswith('test_')]: setattr(NoRecurringPendingTests,_name,None)

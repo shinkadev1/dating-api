@@ -194,6 +194,7 @@ def checkout(request:Request,csrf:str=Form(),plan:str=Form(),request_key:UUID=Fo
     # Без автопродления согласие на автосписания необязательно и ни на что не влияет (сохраняется, если отмечено).
     if consent_recurring!=billing.CONSENT_VERSION: consent_recurring=''
     if consent_terms!='yes' or (billing.recurring() and not consent_recurring):
+        if not billing.recurring(): return notice(request,'Отметьте согласие с политикой, условиями и тарифами. Без него оплата невозможна.',422)
         return notice(request,'Отметьте оба согласия: с политикой, условиями и тарифами, а также с автопродлением. Без них оплата невозможна.',422)
     signed=None
     if token:

@@ -208,6 +208,11 @@ def process(order_id,provider=None):
                 c.execute("UPDATE premium_orders SET provider_status='manual_review' WHERE id=%s",(order_id,))
                 c.execute('UPDATE premium_subscriptions SET auto_renew=FALSE WHERE account_id=%s',(uid,))
                 return c.execute('SELECT * FROM premium_orders WHERE id=%s',(order_id,)).fetchone()
+            if not row['payment_id'] and not recurring() and 'payment_method_id' in row['payload']:
+                # Продление, созданное до выключения автоплатежей: по сохранённой карте не списываем.
+                c.execute("UPDATE premium_orders SET status='failed',provider_status='rejected' WHERE id=%s",(order_id,))
+                c.execute('UPDATE premium_subscriptions SET auto_renew=FALSE WHERE account_id=%s',(uid,))
+                return c.execute('SELECT * FROM premium_orders WHERE id=%s',(order_id,)).fetchone()
             try: payment=provider.request('GET','payments/'+row['payment_id']) if row['payment_id'] else provider.request('POST','payments',row['payload'],row['id'])
             except ProviderRejected:
                 # Confirmed refusal at creation: no payment exists, so the order is final and a new one may be made.
@@ -291,7 +296,7 @@ def web_account(email):
                 rid,amount,_=renewal_terms(sub['plan_id'])
                 nxt={'at':sub['period_end'].isoformat(),'amount_rub':amount,'plan_name':PLANS[rid][0]}
             result['subscription']={'plan_id':plan_id,'plan_name':plan_name,'price_rub':price,'days':days,
-                'auto_renew':renews,'card_attached':bool(sub['method_id']),'card_last4':sub['card_last4'],'card_brand':sub['card_brand'],
+                'auto_renew':renews,'card_attached':renews and bool(sub['method_id']),'card_last4':sub['card_last4'] if renews else None,'card_brand':sub['card_brand'] if renews else None,
                 'period_end':sub['period_end'].isoformat() if sub['period_end'] else None,
                 'started_at':first['applied_at'].isoformat() if first and first['applied_at'] else None,'next_charge':nxt}
         rows=c.execute("SELECT created_at,plan_id,amount_rub,status FROM premium_orders WHERE account_id=%s AND status IN ('paid','failed') ORDER BY created_at DESC LIMIT 100",(acc['id'],)).fetchall()
