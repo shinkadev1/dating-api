@@ -58,6 +58,7 @@ PAY_AUTH_SECRET=<случайные 48+ символов>
 - `PAY_SECURE_COOKIE` — `true`;
 - `YOOKASSA_TEST_MODE` — `true`;
 - `YOOKASSA_RECEIPT_MODE` — `receipt`;
+- `YOOKASSA_RECURRING` — `false`. Автоплатежи в боевом магазине включает менеджер ЮKassa по заявке; без них ЮKassa отвечает 403 «This store can't make recurring payments». При `false` карта не сохраняется, автосписаний и пробного тарифа нет, продлить можно заранее (дни добавляются к сроку), галочка согласия на автосписания показывается, но необязательна. После подключения поставьте `true` в ENV_FILE и перезапустите деплой;
 - `PREM_SERVICE_VK_TOKEN`, `PREM_SERVICE_TG_TOKEN`, `PREM_SERVICE_WEB_TOKEN` — сервер сгенерирует их сам. Задайте их в ENV_FILE, если боты будут ходить в `/internal/peers/...` страницы оплаты;
 - `PREMIUM_FORWARDED_ALLOW_IPS` — см. раздел 5;
 - `YOOKASSA_WEBHOOK_IPS` — по умолчанию пусто, проверка выключена.

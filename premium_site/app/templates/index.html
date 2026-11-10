@@ -13,7 +13,7 @@
     <section class="plan">
       <h2>{{ card.name }}</h2>
       <p class="plan-price">{{ card.price }} ₽ <span>за {{ card.days|days }}</span></p>
-      <p class="muted small">{% if card.trial %}Пробный период доступен один раз. После {{ card.days }} дней — {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% else %}Затем {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% endif %}</p>
+      <p class="muted small">{% if not recurring %}Разовая оплата, без автопродления.{% elif card.trial %}Пробный период доступен один раз. После {{ card.days }} дней — {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% else %}Затем {{ card.renewal_price }} ₽ каждые {{ card.renewal_days }} дней.{% endif %}</p>
       <a class="btn" href="{{ base }}?plan={{ card.id }}">Выбрать</a>
     </section>
   {% endfor %}
@@ -23,7 +23,7 @@
     <div class="order-head"><span>Заказ</span><a href="{{ base }}">Другой тариф</a></div>
     <h2 class="order-title">{{ chosen.name }} — {{ chosen.days|days }}</h2>
     <div class="total"><span>К оплате</span><strong>{{ chosen.price }} ₽</strong></div>
-    <p class="muted">Премиум начисляется сразу после подтверждения оплаты.</p>
+    <p class="muted">Премиум начисляется сразу после подтверждения оплаты.{% if not recurring %} Если премиум уже активен, {{ chosen.days|days }} добавятся к сроку.{% endif %}</p>
 
     <form method="post" action="/checkout" id="checkout">
       <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -34,7 +34,7 @@
       <p class="muted small">{% if linked %}Покупка останется у профиля {{ profile or "из чата" }}.{% else %}Подписка будет привязана к этому email, на него придёт чек.{% endif %}</p>{% endif %}
       <label class="check"><input type="checkbox" name="consent_terms" value="yes" required>
         <span>Я согласен с <a href="https://chatwithyou.site/policy/" target="_blank" rel="noopener">политикой конфиденциальности</a>, <a href="https://chatwithyou.site/terms/" target="_blank" rel="noopener">условиями пользования</a> и <a href="https://chatwithyou.site/#premium" target="_blank" rel="noopener">тарифами</a> сервиса.</span></label>
-      <label class="check"><input type="checkbox" name="consent_recurring" value="{{ consent_version }}" required>
+      <label class="check"><input type="checkbox" name="consent_recurring" value="{{ consent_version }}"{% if recurring %} required{% endif %}>
         <span>Я согласен на сохранение способа оплаты и автоматические списания: после {{ chosen.days }} дней — {{ chosen.renewal_price }} ₽ каждые {{ chosen.renewal_days }} дней автоматически до отключения. Отключить продление можно в любой момент, оплаченный срок сохраняется: {% if linked %}в аккаунте{% else %}на странице заказа или через support@chatwithyou.site{% endif %}.</span></label>
       <button class="btn big" id="pay" disabled>Перейти к оплате →</button>
       <noscript><button class="btn big">Перейти к оплате →</button><style>#pay{display:none}</style></noscript>
@@ -48,7 +48,7 @@
   <script>
   (function(){
     var form=document.getElementById('checkout'),pay=document.getElementById('pay');
-    var boxes=form.querySelectorAll('input[type=checkbox]');
+    var boxes=form.querySelectorAll('input[type=checkbox][required]');
     function sync(){pay.disabled=!Array.prototype.every.call(boxes,function(b){return b.checked})}
     Array.prototype.forEach.call(boxes,function(b){b.addEventListener('change',sync)});sync();
   })();

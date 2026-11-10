@@ -256,6 +256,8 @@ if [ "$payments" -eq 1 ]; then
   default_env PAY_SECURE_COOKIE "true"
   # Сначала тестовый магазин ЮKassa; боевые ключи и YOOKASSA_TEST_MODE=false — в ENV_FILE.
   default_env YOOKASSA_TEST_MODE "true"
+  # Автоплатежи магазина: true только после подключения менеджером ЮKassa.
+  default_env YOOKASSA_RECURRING "false"
   default_env YOOKASSA_RECEIPT_MODE "receipt"
   if [ "$(sed -n 's/^YOOKASSA_RECEIPT_MODE=//p' .env | tail -n 1)" = "receipt" ]; then
     require_secret YOOKASSA_VAT_CODE

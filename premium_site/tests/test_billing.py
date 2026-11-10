@@ -247,3 +247,39 @@ class PostgresTests(unittest.TestCase):
 
 
 if __name__=='__main__':unittest.main()
+
+
+@unittest.skipUnless(os.getenv('TEST_DATABASE_URL'),'TEST_DATABASE_URL required for PostgreSQL tests')
+class NoRecurringTests(PostgresTests):
+    """YOOKASSA_RECURRING=false: магазин без автоплатежей."""
+    def setUp(self):
+        super().setUp()
+        self.off=patch.dict(os.environ,{'YOOKASSA_RECURRING':'false'});self.off.start()
+
+    def tearDown(self):
+        self.off.stop();super().tearDown()
+
+    def test_one_off_payment_saves_no_card_and_extends_active_premium(self):
+        order=self.create('week')
+        self.assertFalse(order['payload']['save_payment_method'])
+        billing.process(order['id'],self.provider)
+        sub=self.row('SELECT * FROM premium_subscriptions')
+        self.assertFalse(sub['auto_renew']);self.assertIsNone(sub['method_id']);self.assertIsNone(sub['card_last4'])
+        first=self.row('SELECT premium_until FROM premium_accounts')['premium_until']
+        again=self.create('week');billing.process(again['id'],self.provider)
+        second=self.row('SELECT premium_until FROM premium_accounts')['premium_until']
+        self.assertAlmostEqual((second-first).total_seconds()/86400,7,places=3)
+
+    def test_trial_not_offered(self):
+        self.assertFalse(billing.offered('trial'));self.assertTrue(billing.offered('week'))
+        with self.assertRaises(HTTPException) as refused: self.create('trial')
+        self.assertEqual(refused.exception.status_code,422)
+
+    def test_tick_never_charges_previously_saved_cards(self):
+        self.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,auto_renew,method_id,period_end) VALUES(%s,'week','x@example.test','v',TRUE,'old-test-card',NOW()-INTERVAL '1 hour')",(self.account,))
+        with patch.object(billing,'Provider',return_value=self.provider):billing.tick()
+        self.assertEqual(self.provider.calls,[])
+        self.assertEqual(self.row('SELECT count(*) AS n FROM premium_orders')['n'],0)
+
+# Наследуем только setUp/хелперы: тесты родителя рассчитаны на включённые автоплатежи.
+for _name in [n for n in vars(PostgresTests) if n.startswith('test_') and n not in vars(NoRecurringTests)]: setattr(NoRecurringTests,_name,None)

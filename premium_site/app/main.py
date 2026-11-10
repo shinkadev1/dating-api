@@ -50,7 +50,7 @@ def page(request,name,context=None,status=200):
     owner=identity.session(request)
     token=None
     if not owner: token,owner=identity.new_session()
-    response=templates.TemplateResponse(request,name,{'owner':owner,'csrf':owner['csrf'],'profile':identity.profile_label(owner),'year':datetime.now(timezone.utc).year,**(context or {})},status_code=status)
+    response=templates.TemplateResponse(request,name,{'owner':owner,'csrf':owner['csrf'],'profile':identity.profile_label(owner),'year':datetime.now(timezone.utc).year,'recurring':billing.recurring(),**(context or {})},status_code=status)
     return identity.cookie(response,token) if token else response
 
 def notice(request,message,status,order_id=None):
@@ -60,6 +60,7 @@ def notice(request,message,status,order_id=None):
 def plan_cards():
     cards=[]
     for plan_id,(name,days,price) in billing.PLANS.items():
+        if not billing.offered(plan_id): continue
         renewal_id,renewal_price,renewal_days=billing.renewal_terms(plan_id)
         cards.append({'id':plan_id,'name':name,'days':days,'price':price,'renewal_price':renewal_price,'renewal_days':renewal_days,'trial':renewal_id!=plan_id})
     return cards
@@ -189,8 +190,10 @@ def cancel(request:Request,csrf:str=Form()):
 @app.post('/checkout')
 def checkout(request:Request,csrf:str=Form(),plan:str=Form(),request_key:UUID=Form(),consent_terms:str=Form(default=''),consent_recurring:str=Form(default=''),email:str=Form(default='',max_length=254),token:str=Form(default='',max_length=256)):
     current=identity.csrf(request,csrf)
-    # The button state in the page is only a convenience: both consents are enforced here.
-    if consent_terms!='yes' or consent_recurring!=billing.CONSENT_VERSION:
+    # The button state in the page is only a convenience: required consents are enforced here.
+    # Без автопродления согласие на автосписания необязательно и ни на что не влияет (сохраняется, если отмечено).
+    if consent_recurring!=billing.CONSENT_VERSION: consent_recurring=''
+    if consent_terms!='yes' or (billing.recurring() and not consent_recurring):
         return notice(request,'Отметьте оба согласия: с политикой, условиями и тарифами, а также с автопродлением. Без них оплата невозможна.',422)
     signed=None
     if token:
@@ -227,6 +230,7 @@ def get_order(request,order_id):
 
 def renewal_owner(current,order):
     """A guest may switch off renewal only from the session that bought the account's latest subscription."""
+    if not billing.recurring(): return False
     if current['account_id'] or order['created_session']!=current['digest']: return False
     with billing.connect() as c:
         # Once the email owner confirmed it with a code, the account is theirs to manage.

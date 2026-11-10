@@ -18,6 +18,15 @@ CONSENT_VERSION = '2026-11-04'
 # Plan that is charged after the first period when it differs from the purchased one (trial -> week).
 RENEWAL = {'trial':'week'}
 
+def recurring():
+    """Автоплатежи магазина (YOOKASSA_RECURRING). Выключены: карта не сохраняется, автосписаний и пробного тарифа нет,
+    продлить можно заранее — дни добавляются к сроку. На сервере по умолчанию false (deploy/update.sh)."""
+    return os.getenv('YOOKASSA_RECURRING','true').strip().lower()=='true'
+
+def offered(plan):
+    """Тариф продаётся сейчас: пробный — только вместе с автопродлением."""
+    return plan in PLANS and (plan!='trial' or recurring())
+
 def renewal_terms(plan):
     """(plan_id, price in RUB, days) of the automatic charge that follows `plan`."""
     plan=ALIASES.get(plan,plan)
@@ -110,7 +119,7 @@ class Provider:
 def payload(order,email,method=None):
     body={'amount':{'value':f"{order['amount_rub']}.00",'currency':'RUB'},'capture':True,'description':'Premium '+order['plan_id'],'metadata':{'order_id':str(order['id'])}}
     if method: body['payment_method_id']=method
-    else: body.update(save_payment_method=True,confirmation={'type':'redirect','return_url':os.getenv('PAY_PUBLIC_URL','https://pay.chatwithyou.site').rstrip('/')+'/orders/'+str(order['id'])})
+    else: body.update(save_payment_method=recurring(),confirmation={'type':'redirect','return_url':os.getenv('PAY_PUBLIC_URL','https://pay.chatwithyou.site').rstrip('/')+'/orders/'+str(order['id'])})
     mode=os.getenv('YOOKASSA_RECEIPT_MODE','')
     if mode not in ('receipt','exempt'): raise HTTPException(503,'Не настроена политика чеков магазина')
     if mode=='receipt':
@@ -135,6 +144,7 @@ def create_order(uid,plan,key,email,renew=False,via_link=False,consent_version=C
     email was confirmed by a code is never paid into by a guest."""
     plan=ALIASES.get(plan,plan)
     if plan not in PLANS: raise HTTPException(422,'Неизвестный тариф')
+    if not renew and not offered(plan): raise HTTPException(422,'Этот тариф сейчас недоступен')
     guest=bool(guest_email)
     def refuse(text): raise HTTPException(409,GUEST_REFUSED if guest else text)
     with connect() as c:
@@ -159,7 +169,8 @@ def create_order(uid,plan,key,email,renew=False,via_link=False,consent_version=C
             email=owner['email'] or email  # A chat-link account has no email: the one typed at checkout goes to the receipt.
             sub=c.execute('SELECT * FROM premium_subscriptions WHERE account_id=%s',(uid,)).fetchone()
             if c.execute(f'SELECT 1 FROM premium_orders o WHERE o.account_id=%s AND {UNFINISHED}',(uid,)).fetchone(): refuse('Уже есть незавершённый платёж')
-            if not renew and owner['premium_until'] and owner['premium_until']>datetime.now(timezone.utc): refuse('Подписка уже оплачена')
+            # Без автопродления премиум продлевают заранее: оплаченные дни прибавляются к текущему сроку.
+            if not renew and recurring() and owner['premium_until'] and owner['premium_until']>datetime.now(timezone.utc): refuse('Подписка уже оплачена')
             if plan=='trial' and owner['trial_used']: refuse('Пробный период уже использован')
             if renew and (not sub or not sub['auto_renew'] or not sub['method_id'] or sub['period_end']>datetime.now(timezone.utc)): return None
             # An unverified buyer must not replace the saved card of someone else's subscription.
@@ -169,7 +180,7 @@ def create_order(uid,plan,key,email,renew=False,via_link=False,consent_version=C
             body=payload(order,email,sub['method_id'] if renew else None)
             row=c.execute("INSERT INTO premium_orders(id,account_id,amount_rub,period_hours,status,plan_id,request_key,payload,created_session) VALUES(%s,%s,%s,%s,'pending',%s,%s,%s,%s) RETURNING *",(order['id'],uid,order['amount_rub'],PLANS[plan][1]*24,plan,key,Jsonb(body),session_digest)).fetchone()
             if not renew:
-                c.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,created_via_link) VALUES(%s,%s,%s,%s,%s) ON CONFLICT(account_id) DO UPDATE SET plan_id=EXCLUDED.plan_id,email=EXCLUDED.email,auto_renew=TRUE,method_id=NULL,consent_version=EXCLUDED.consent_version,created_via_link=premium_subscriptions.created_via_link AND EXCLUDED.created_via_link",(uid,plan,email,consent_version,via_link))
+                c.execute("INSERT INTO premium_subscriptions(account_id,plan_id,email,consent_version,created_via_link,auto_renew) VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT(account_id) DO UPDATE SET plan_id=EXCLUDED.plan_id,email=EXCLUDED.email,auto_renew=EXCLUDED.auto_renew,method_id=NULL,card_last4=NULL,card_brand=NULL,consent_version=EXCLUDED.consent_version,created_via_link=premium_subscriptions.created_via_link AND EXCLUDED.created_via_link",(uid,plan,email,consent_version,via_link,recurring()))
             return row
 
 def process(order_id,provider=None):
@@ -240,7 +251,8 @@ def tick():
         # Used chat-link nonces only matter while a token can still be valid (24h + clock skew).
         if c.execute("SELECT to_regclass('premium_link_nonces') IS NOT NULL AS ok").fetchone()['ok']:
             c.execute("DELETE FROM premium_link_nonces WHERE created_at<NOW()-INTERVAL '25 hours'")
-        due=c.execute('SELECT * FROM premium_subscriptions WHERE auto_renew AND method_id IS NOT NULL AND period_end<=NOW()').fetchall()
+        # Без автоплатежей магазина не списываем, в том числе по картам, сохранённым раньше (например, в тестовом магазине).
+        due=c.execute('SELECT * FROM premium_subscriptions WHERE auto_renew AND method_id IS NOT NULL AND period_end<=NOW()').fetchall() if recurring() else []
     for sub in due:
         try:
             key=uuid5(NAMESPACE_URL,f"premium:{sub['account_id']}:{sub['period_end'].isoformat()}")
@@ -274,11 +286,12 @@ def web_account(email):
             first=c.execute("SELECT applied_at FROM premium_orders WHERE account_id=%s AND status='paid' AND NOT (COALESCE(payload,'{}'::jsonb) ? 'payment_method_id') ORDER BY applied_at DESC NULLS LAST,created_at DESC LIMIT 1",(acc['id'],)).fetchone()
             plan_id,plan_name,price,days=plan_info(last['plan_id'] if last and last['plan_id'] else sub['plan_id'])
             nxt=None
-            if sub['auto_renew'] and sub['method_id'] and sub['period_end']:
+            renews=recurring() and bool(sub['auto_renew'])
+            if renews and sub['method_id'] and sub['period_end']:
                 rid,amount,_=renewal_terms(sub['plan_id'])
                 nxt={'at':sub['period_end'].isoformat(),'amount_rub':amount,'plan_name':PLANS[rid][0]}
             result['subscription']={'plan_id':plan_id,'plan_name':plan_name,'price_rub':price,'days':days,
-                'auto_renew':bool(sub['auto_renew']),'card_attached':bool(sub['method_id']),'card_last4':sub['card_last4'],'card_brand':sub['card_brand'],
+                'auto_renew':renews,'card_attached':bool(sub['method_id']),'card_last4':sub['card_last4'],'card_brand':sub['card_brand'],
                 'period_end':sub['period_end'].isoformat() if sub['period_end'] else None,
                 'started_at':first['applied_at'].isoformat() if first and first['applied_at'] else None,'next_charge':nxt}
         rows=c.execute("SELECT created_at,plan_id,amount_rub,status FROM premium_orders WHERE account_id=%s AND status IN ('paid','failed') ORDER BY created_at DESC LIMIT 100",(acc['id'],)).fetchall()

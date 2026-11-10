@@ -167,3 +167,15 @@ class WebAccountTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@unittest.skipUnless(os.getenv('TEST_DATABASE_URL'), 'TEST_DATABASE_URL required for PostgreSQL tests')
+class NoRecurringWebAccountTests(WebAccountTests):
+    def test_active_subscription_with_card_and_next_charge(self):
+        # Старая подписка с сохранённой картой при выключенных автоплатежах: кабинет не обещает списание.
+        self.pay('month')
+        with patch.dict(os.environ, {'YOOKASSA_RECURRING': 'false'}):
+            sub = self.get().json()['subscription']
+        self.assertFalse(sub['auto_renew']); self.assertIsNone(sub['next_charge'])
+
+for _name in [n for n in vars(WebAccountTests) if n.startswith('test_') and n not in vars(NoRecurringWebAccountTests)]: setattr(NoRecurringWebAccountTests, _name, None)

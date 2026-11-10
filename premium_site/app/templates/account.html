@@ -1,7 +1,13 @@
 {% extends 'base.html' %}{% block title %}Аккаунт и подписка{% endblock %}
 {% block content %}
 <p>Оплаченный срок: <strong>{{ owner.premium_until|dt if owner.premium_until else 'нет' }}</strong>.</p>
-{% if subscription %}
+{% if subscription and not recurring %}
+<section class="panel">
+  <p>Тариф: {{ subscription.plan_id }}.</p>
+  <p class="muted small">Продление вручную: выберите тариф до окончания срока, дни добавятся к оплаченному.</p>
+  <a class="btn" href="/">Продлить</a>
+</section>
+{% elif subscription %}
 <section class="panel">
   <p>Тариф: {{ subscription.plan_id }}. Автопродление: <strong>{{ 'включено' if subscription.auto_renew else 'отключено' }}</strong>.</p>
   <p>Карта: <strong>{{ 'привязана' if subscription.method_id else 'отвязана' }}</strong>.</p>

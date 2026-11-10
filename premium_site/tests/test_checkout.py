@@ -353,3 +353,40 @@ class CheckoutTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+@unittest.skipUnless(os.getenv('TEST_DATABASE_URL'), 'TEST_DATABASE_URL not configured')
+class NoRecurringCheckoutTests(CheckoutTests):
+    def setUp(self):
+        super().setUp()
+        self.off = patch.dict(os.environ, {'YOOKASSA_RECURRING': 'false'}); self.off.start()
+
+    def tearDown(self):
+        self.off.stop(); super().tearDown()
+
+    def test_plans_are_one_off_and_trial_hidden(self):
+        self.login()
+        html = self.client.get('/').text
+        self.assertNotIn('plan=trial', html); self.assertNotIn('Пробный', html)
+        self.assertEqual(html.count('Разовая оплата, без автопродления.'), 3)
+        self.assertNotIn('каждые', html)
+        self.assertNotIn('name="plan" value="trial"', self.client.get('/?plan=trial').text)
+
+    def test_recurring_consent_shown_but_optional(self):
+        self.login()
+        html = self.client.get('/?plan=month').text
+        self.assertIn('name="consent_recurring"', html)
+        self.assertRegex(html, r'name="consent_terms" value="yes" required')
+        self.assertNotRegex(html, r'name="consent_recurring" value="[^"]*" required')
+        self.assertIn('30 дней добавятся к сроку', html)
+        self.assertEqual(self.post(plan='month', consent_recurring=None).status_code, 303)
+        self.assertEqual(self.row('SELECT consent_version FROM premium_subscriptions')['consent_version'], '')
+        self.assertEqual(self.post(plan='month', consent_terms=None).status_code, 422)
+
+    def test_account_shows_manual_renewal(self):
+        self.login(); self.post(plan='week')
+        html = self.client.get('/account').text
+        self.assertIn('Продление вручную', html); self.assertIn('>Продлить<', html)
+        self.assertNotIn('Автопродление:', html); self.assertNotIn('Следующее списание', html); self.assertNotIn('Отключить автопродление', html)
+
+for _name in [n for n in vars(CheckoutTests) if n.startswith('test_') and n not in vars(NoRecurringCheckoutTests)]: setattr(NoRecurringCheckoutTests, _name, None)
