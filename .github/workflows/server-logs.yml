@@ -41,6 +41,14 @@ jobs:
             docker logs vk-chat-api --since 24h 2>&1 | grep -E "Не записал сообщение|Архив сообщений" | tail -n 20 || true
             echo '--- ENGINE BRIDGE ---'
             docker logs vk-engine-bridge --tail 80 2>&1 || true
+            echo '--- PREMIUM ---'
+            # Режим магазина без значений ключей: только тип ключа (live/test) и несекретные настройки чеков.
+            awk -F= '
+              /^YOOKASSA_SECRET_KEY=/ { split($2, p, "_"); print "YOOKASSA_SECRET_KEY kind", (length($2) ? p[1] : "empty") }
+              /^YOOKASSA_(TEST_MODE|RECEIPT_MODE|VAT_CODE|PAYMENT_SUBJECT)=/ { print }
+              /^(RESEND_API_KEY|AUTH_MAIL_FROM)=/ { print $1, (length($2) ? "set" : "empty") }
+            ' .env
+            docker logs vk-premium-web --since 24h 2>&1 | grep -E "YooKassa|ERROR|Traceback|Error" | tail -n 40 || true
             echo '--- LOGS ---'
             docker logs vk-bot --tail 200 2>&1 || true
 
