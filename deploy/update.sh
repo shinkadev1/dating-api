@@ -124,6 +124,12 @@ if ! optional_secret CHAT_API_TG_TOKEN; then
   drop_env CHAT_API_TG_TOKEN
 fi
 
+# Bot CRM (Vercel) управляет только рассылками и читает аналитику. Тот же секрет — CHAT_API_CRM_TOKEN в Vercel.
+if ! optional_secret CHAT_API_CRM_TOKEN; then
+  echo "Нет CHAT_API_CRM_TOKEN: вкладки «Рассылки» и «Аналитика» в Bot CRM не получат доступ к Chat API."
+  drop_env CHAT_API_CRM_TOKEN
+fi
+
 # Ключи Beget больше не читаются (медиа в Supabase Storage); блок оставлен, чтобы старые значения не ломали .env.
 if optional_secret S3_ACCESS_KEY && optional_secret S3_SECRET_KEY && optional_secret S3_BUCKET; then
   if ! optional_secret S3_ENDPOINT_URL; then
@@ -303,7 +309,7 @@ if [ "$payments" -eq 1 ]; then
   min_length PREMIUM_LINK_SECRET
   min_length PAY_AUTH_SECRET
   link_secret=$(env_value PREMIUM_LINK_SECRET)
-  for key in CHAT_API_SERVICE_TOKEN CHAT_API_APP_TOKEN CHAT_API_TG_TOKEN CHAT_API_ENGINE_TOKEN; do
+  for key in CHAT_API_SERVICE_TOKEN CHAT_API_APP_TOKEN CHAT_API_TG_TOKEN CHAT_API_ENGINE_TOKEN CHAT_API_CRM_TOKEN; do
     if [ "$(env_value "$key")" = "$link_secret" ]; then
       fail "PREMIUM_LINK_SECRET должен отличаться от ${key}."
     fi
