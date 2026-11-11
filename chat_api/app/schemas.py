@@ -129,3 +129,58 @@ class StatsOut(BaseModel):
     chatting: int
     humans: PresenceOut
     bots: PresenceOut
+
+
+BroadcastPlatform = Literal["vk", "tg", "web"]
+BroadcastEvent = Literal["first_seen", "last_seen", "dialog_ended", "premium_ended"]
+BroadcastStatus = Literal["scheduled", "sending", "done", "active", "paused", "cancelled"]
+
+
+class BroadcastIn(BaseModel):
+    title: str = Field("", max_length=200, description="Название для CRM; пользователи его не видят")
+    text: str = Field(min_length=1, max_length=4096, description="Текст уведомления")
+    platforms: list[BroadcastPlatform] = Field(min_length=1, description="Кому: vk, tg, web")
+    kind: Literal["at", "event"] = Field(description="`at` — один раз в send_at, `event` — после события")
+    send_at: datetime | None = Field(None, description="Для `at`: когда отправить; в прошлом — сразу")
+    event: BroadcastEvent | None = Field(
+        None,
+        description="Для `event`: first_seen — первый раз написал, last_seen — последняя активность, "
+        "dialog_ended — закончился диалог, premium_ended — истёк премиум",
+    )
+    delay_minutes: int | None = Field(None, ge=0, le=525_600, description="Для `event`: пауза после события")
+    repeat: bool = Field(False, description="Для `event`: после каждого нового события, а не один раз")
+
+
+class BroadcastPatch(BaseModel):
+    title: str | None = Field(None, max_length=200)
+    text: str | None = Field(None, min_length=1, max_length=4096)
+    platforms: list[BroadcastPlatform] | None = Field(None, min_length=1)
+    send_at: datetime | None = None
+    delay_minutes: int | None = Field(None, ge=0, le=525_600)
+    repeat: bool | None = None
+    status: Literal["scheduled", "active", "paused", "cancelled"] | None = Field(
+        None, description="paused/active — пауза рассылки после события, cancelled — отменить"
+    )
+
+
+class BroadcastOut(BaseModel):
+    id: int
+    title: str
+    text: str
+    has_image: bool
+    platforms: list[str]
+    kind: Literal["at", "event"]
+    send_at: datetime | None
+    event: str | None
+    delay_minutes: int | None
+    repeat: bool
+    status: BroadcastStatus
+    sent_count: int = Field(description="Сколько получателей поставлено в очередь")
+    created_at: datetime
+    updated_at: datetime
+    active_since: datetime | None = Field(description="Для `event`: учитываются события не раньше этого момента")
+    finished_at: datetime | None
+
+
+class AudienceOut(BaseModel):
+    recipients: int = Field(description="Сколько пар «человек — чат» получат рассылку по времени сейчас")

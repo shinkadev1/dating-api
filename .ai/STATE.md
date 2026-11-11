@@ -1,5 +1,9 @@
 # Состояние vk-bot
 
+## Ветка feature/broadcasts, 2026-11-11
+
+От master 410264c. Добавлены `005_broadcasts.sql`, `app/broadcasts/{settings,service}.py`, `repositories/broadcasts.py`, `routers/broadcasts.py`, модели в `schemas.py`, клиент `crm` в `deps.py`/`config.py`, задача в `main.py`, `CHAT_API_CRM_TOKEN` в `docker-compose.yml` и `.env.example`, тест `tests/test_broadcasts_db.py`. Проверки (Python 3.13, Postgres 16 через TEST_DATABASE_URL): `pytest tests -q` в `chat_api` — 90 passed, 0 skipped (было 81); `compileall app` без ошибок; повторный ensure_schema без ошибок. Сквозная проверка: uvicorn + Postgres + Redis локально, Bot CRM (vite preview, настоящий `api/chat.js`, GitHub замокан) — разовая рассылка на 5 человек tg ушла за проход, в `chat:broadcast:tg` 5 событий `notice`; рассылка после события создаётся и ставится на паузу. Не проверялось: деплой, Cloudflare Access до api.chatwithyou.site из Vercel, доставка ботами в Telegram/ВК, фото через S3.
+
 ## Ветка loop/account-page, 2026-11-10
 
 Worktree `.worktrees/vk-bot-account-page`, от origin/master 274cee9. Изменены `premium_site/app/{billing,identity,main}.py`, `docker-compose.payments.yml`, `premium_site/DEPLOY.md` (раздел 11), добавлен `premium_site/tests/test_web_account.py`. Проверки (venv Python 3.10, pgserver): `pytest tests -q -rs` в `premium_site` — 89 passed, 0 skipped (было 75); `compileall premium_site/app` без ошибок; `docker compose -f docker-compose.yml -f docker-compose.payments.yml config -q` (с подставными значениями обязательных переменных окружения) и `git diff --check origin/master` без ошибок. Не проверялось: реальная ЮKassa (форма `payment_method.card` в ответе взята из документации), вызов из Worker, деплой. У подписок, оплаченных до выкладки, `card_last4` пуст до следующего платежа.

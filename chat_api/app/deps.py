@@ -13,7 +13,7 @@ from app.peer import ENGINE_PLATFORM, ENGINE_USER_ID, Peer
 from app.services.chat import ChatService
 from app.services.media import MediaService
 
-Client = Literal["bot", "tg_bot", "app", "engine"]
+Client = Literal["bot", "tg_bot", "app", "engine", "crm"]
 # Бот ВК и Telegram не может действовать от имени пользователей сайта и наоборот.
 # Бот Telegram на отдельном сервере — только за пользователей tg,
 # engine_bridge — только за аккаунты chat-engine.
@@ -22,6 +22,8 @@ CLIENT_PLATFORMS: dict[Client, frozenset[str]] = {
     "tg_bot": frozenset({"tg"}),
     "app": frozenset({"web"}),
     "engine": frozenset({ENGINE_PLATFORM}),
+    # CRM управляет только рассылками и не действует за пользователей.
+    "crm": frozenset(),
 }
 
 _bearer = HTTPBearer(auto_error=False)
@@ -57,6 +59,8 @@ def identify_client(token: str | None, settings: Settings) -> Client | None:
         return "engine"
     if settings.chat_api_tg_token and _matches(token, settings.chat_api_tg_token):
         return "tg_bot"
+    if settings.chat_api_crm_token and _matches(token, settings.chat_api_crm_token):
+        return "crm"
     return None
 
 

@@ -1,5 +1,9 @@
 # Текущая задача
 
+## Рассылки из Bot CRM — 2026-11-11
+
+Ветка `feature/broadcasts` от master 410264c. Статус: реализовано и проверено локально, ждёт решения о merge в master (= деплой). Связанная правка — aStormspirit/bot-crm, ветка `feature/broadcasts` (вкладка «Рассылки», прокси `/api/chat`). Перед включением: задать `CHAT_API_CRM_TOKEN` в ENV_FILE (и в Vercel), `CHAT_API_URL`, `CRM_ADMINS`, при Cloudflare Access — service token. Проверки — в STATE.md.
+
 ## Кабинет подписки (vk-bot) — 2026-11-10
 
 Задача LoopOS 2026-11-10-account-page, ветка `loop/account-page` (worktree `.worktrees/vk-bot-account-page`). Статус: реализовано, локальный коммит, ждёт ревью; push, merge и деплой не выполнялись. Проверки — в [STATE.md](STATE.md). Следующий шаг: ревью; выкладка vk-bot до Worker и landing; `CHAT_API_APP_TOKEN` должен быть в `.env` сервера.

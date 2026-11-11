@@ -14,8 +14,9 @@ from redis.asyncio import Redis
 from app.config import get_settings
 from app.db import create_pool, ensure_schema
 from app.events import REDIS_SOCKET_TIMEOUT, EventBus, WebSocketHub
+from app.broadcasts.service import BroadcastService
 from app.reminders.service import ReminderService
-from app.routers import channels, engine, media, peers, stats, visitors, ws
+from app.routers import broadcasts, channels, engine, media, peers, stats, visitors, ws
 from app.services.archive import MessageArchiver
 from app.services.chat import ChatService
 from app.services.media import MediaService
@@ -54,6 +55,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ReminderService(pool, EventBus(redis, settings.events_maxlen), media_service).run(),
         name="reminders",
     )
+    broadcasts_task = asyncio.create_task(
+        BroadcastService(pool, EventBus(redis, settings.events_maxlen)).run(),
+        name="broadcasts",
+    )
     app.state.hub = hub
     app.state.pool = pool
     app.state.redis = redis
@@ -64,9 +69,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        reminders_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await reminders_task
+        for task in (reminders_task, broadcasts_task):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         if archive_task is not None:
             archive_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -85,6 +91,7 @@ app.include_router(peers.router, prefix="/api/v1")
 app.include_router(media.router, prefix="/api/v1")
 app.include_router(visitors.router, prefix="/api/v1")
 app.include_router(channels.router, prefix="/api/v1")
+app.include_router(broadcasts.router, prefix="/api/v1")
 app.include_router(engine.router, prefix="/api/v1")
 app.include_router(stats.router, prefix="/api/v1")
 app.include_router(ws.router, prefix="/api/v1")

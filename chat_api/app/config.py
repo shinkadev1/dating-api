@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     chat_api_engine_token: str | None = Field(None, min_length=16)
     # Токен бота Telegram на отдельном сервере: действует только за пользователей tg.
     chat_api_tg_token: str | None = Field(None, min_length=16)
+    # Токен Bot CRM: только рассылки (/broadcasts). Без него CRM рассылками не управляет.
+    chat_api_crm_token: str | None = Field(None, min_length=16)
     # Сколько человек ждёт живого собеседника, прежде чем ему подберут бота из chat-engine.
     engine_fallback_after_seconds: float = Field(0, ge=0)
     # Кто писал за это время, считается онлайн в /stats.
@@ -45,6 +47,7 @@ class Settings(BaseSettings):
     @field_validator(
         "chat_api_engine_token",
         "chat_api_tg_token",
+        "chat_api_crm_token",
         "s3_endpoint_url",
         "s3_bucket",
         "s3_access_key",
@@ -89,7 +92,12 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _distinct_tokens(self) -> Settings:
-        optional = [self.chat_api_engine_token, self.chat_api_tg_token, self.premium_link_secret]
+        optional = [
+            self.chat_api_engine_token,
+            self.chat_api_tg_token,
+            self.chat_api_crm_token,
+            self.premium_link_secret,
+        ]
         tokens = [self.chat_api_service_token, self.chat_api_app_token, *filter(None, optional)]
         if len(set(tokens)) != len(tokens):
             raise ValueError("Токены CHAT_API_*_TOKEN и PREMIUM_LINK_SECRET должны различаться")

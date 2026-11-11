@@ -1,5 +1,9 @@
 # История важных изменений
 
+## 2026-11-11 — Рассылки из Bot CRM
+
+Таблицы `broadcasts`/`broadcast_log`, фоновая задача `broadcasts`, API `/api/v1/broadcasts`, токен `CHAT_API_CRM_TOKEN` (клиент `crm`, только рассылки). Рассылки по времени и через паузу после события (first_seen, last_seen, dialog_ended, premium_ended). Причина: пользователь хочет создавать рассылки из CRM, хранение выбрано в базе Chat API, а не файлом в GitHub.
+
 ## 2026-11-10 — кабинет подписки: серверная часть (ветка `loop/account-page`)
 
 В premium_site добавлены `POST /internal/web/account` и `/internal/web/account/cancel` для страницы аккаунта на сайте (подписка, ближайшее списание, карта, история платежей, отмена автопродления). Новые колонки `premium_subscriptions.card_last4`, `card_brand` (аддитивно): последние 4 цифры и бренд пишутся при успешной оплате с сохранением карты, при отмене обнуляются. Авторизация Worker — `PREM_SERVICE_WEB_TOKEN` или `CHAT_API_APP_TOKEN` (передан сервису `premium` в `docker-compose.payments.yml`). Причина: просьба пользователя о странице с списаниями и отменой подписки. Клиентская часть — в landing.

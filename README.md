@@ -51,6 +51,30 @@ Chat API публикует событие `demand` в `chat:events:engine`, `en
 Сайт получает событие `type: notice` по WebSocket `/api/v1/events/web`.
 Его нужно показать отдельно от реплики собеседника.
 
+## Рассылки из CRM
+
+Bot CRM (вкладка «Рассылки») управляет рассылками через `/api/v1/broadcasts` с токеном `CHAT_API_CRM_TOKEN`
+(подходит и сервисный токен бота). Хранятся они в таблице `broadcasts`, кому что ушло — в `broadcast_log`.
+Отправляет фоновая задача `broadcasts` (`app/broadcasts/`): раз в минуту ставит получателей в те же потоки
+`chat:broadcast:<platform>`, что и `/notifications`, пачками по 50. Журнал и постановка в очередь — одна транзакция.
+
+- `kind: at` — один раз в `send_at` всем людям выбранных площадок (`platforms`: vk, tg, web). Статусы:
+  `scheduled` → `sending` → `done`; отменить можно до конца отправки (`cancelled`).
+- `kind: event` — каждому через `delay_minutes` после события: `first_seen` (впервые написал в чат),
+  `last_seen` (последняя активность), `dialog_ended` (конец последнего диалога), `premium_ended` (истёк премиум).
+  Учитываются события не раньше запуска (`active_since`). `repeat: false` — человеку в чате один раз,
+  `true` — после каждого нового события. Ночью (23–10 МСК) не отправляется, людей в поиске и в диалоге
+  пропускает до следующего прохода. Статусы `active` / `paused` / `cancelled`.
+
+| Метод | Путь | Что делает |
+|---|---|---|
+| GET | `/broadcasts` | все рассылки со статусом и `sent_count` |
+| GET | `/broadcasts/audience?platforms=tg&platforms=vk` | сколько получателей у рассылки по времени |
+| POST | `/broadcasts` | создать (`title`, `text`, `platforms`, `kind`, `send_at` или `event` + `delay_minutes` + `repeat`) |
+| PATCH | `/broadcasts/{id}` | изменить до отправки; `status`: `paused`/`active`/`cancelled` |
+| PUT / DELETE | `/broadcasts/{id}/image` | фото к рассылке (multipart `file`) / убрать |
+| DELETE | `/broadcasts/{id}` | удалить вместе с журналом (не во время отправки) |
+
 ## Медиа
 
 В активном диалоге бот забирает у человека фото, видео, кружок или голосовое и вызывает
