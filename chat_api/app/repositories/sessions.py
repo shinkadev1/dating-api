@@ -390,6 +390,15 @@ async def _remember(conn: AsyncConnection, peer: Peer, handle: str | None, searc
         return
 
     params = {**_key(peer), "handle": _public_handle(peer, handle), "delta": search_delta}
+    # День активности для аналитики CRM (DAU, retention). Повтор в тот же день ничего не пишет.
+    await conn.execute(
+        """
+        INSERT INTO user_activity (platform, user_id, day)
+        VALUES (%(platform)s, %(user_id)s, (NOW() AT TIME ZONE 'Europe/Moscow')::date)
+        ON CONFLICT DO NOTHING
+        """,
+        params,
+    )
     if not peer.bot_key:
         await conn.execute(
             """

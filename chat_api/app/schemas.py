@@ -184,3 +184,57 @@ class BroadcastOut(BaseModel):
 
 class AudienceOut(BaseModel):
     recipients: int = Field(description="Сколько пар «человек — чат» получат рассылку по времени сейчас")
+
+
+class UserStatsOut(BaseModel):
+    total: int = Field(description="Людей на выбранных площадках")
+    premium: int = Field(description="С действующим премиумом")
+    active_24h: int
+    active_7d: int
+    new_24h: int
+    new_7d: int
+    searching: int = Field(description="Сейчас в поиске")
+    chatting: int = Field(description="Сейчас в диалоге")
+
+
+class UserRowOut(BaseModel):
+    platform: str
+    user_id: int
+    handle: str | None
+    search_count: int
+    started_at: datetime
+    last_seen_at: datetime
+    premium_until: datetime | None
+    phase: Phase
+    channels: int = Field(description="Через сколько чатов (сообществ, ботов) писал")
+
+
+class UserListOut(BaseModel):
+    total: int
+    items: list[UserRowOut]
+
+
+class UserChatOut(BaseModel):
+    platform: str
+    external_id: str
+    title: str
+    started_at: datetime
+    last_seen_at: datetime
+    search_count: int
+
+
+class UserBroadcastOut(BaseModel):
+    id: int
+    title: str
+    text: str
+    sent_at: datetime
+    times: int
+
+
+class UserDetailOut(UserRowOut):
+    channels: int = 0
+    chats: list[UserChatOut]
+    dialogs: int = Field(description="Сколько было диалогов")
+    last_dialog_at: datetime | None
+    reported: int = Field(description="Диалогов, закончившихся жалобой")
+    broadcasts: list[UserBroadcastOut] = Field(description="Какие рассылки получил (последние 30)")

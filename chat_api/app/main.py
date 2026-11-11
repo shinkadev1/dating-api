@@ -16,7 +16,7 @@ from app.db import create_pool, ensure_schema
 from app.events import REDIS_SOCKET_TIMEOUT, EventBus, WebSocketHub
 from app.broadcasts.service import BroadcastService
 from app.reminders.service import ReminderService
-from app.routers import broadcasts, channels, engine, media, peers, stats, visitors, ws
+from app.routers import analytics, broadcasts, channels, engine, media, peers, stats, users, visitors, ws
 from app.services.archive import MessageArchiver
 from app.services.chat import ChatService
 from app.services.media import MediaService
@@ -92,6 +92,8 @@ app.include_router(media.router, prefix="/api/v1")
 app.include_router(visitors.router, prefix="/api/v1")
 app.include_router(channels.router, prefix="/api/v1")
 app.include_router(broadcasts.router, prefix="/api/v1")
+app.include_router(users.router, prefix="/api/v1")
+app.include_router(analytics.router, prefix="/api/v1")
 app.include_router(engine.router, prefix="/api/v1")
 app.include_router(stats.router, prefix="/api/v1")
 app.include_router(ws.router, prefix="/api/v1")
