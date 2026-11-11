@@ -28,6 +28,8 @@ class EngineAccount:
     id: str
     authorized: bool
     state: str | None
+    # Конец лимита аккаунта (ISO datetime). Старый chat-engine поле не присылает.
+    limited_until: str | None = None
 
 
 class EngineClient:
@@ -61,7 +63,10 @@ class EngineClient:
 
     async def accounts(self) -> list[EngineAccount]:
         body = await self._request("GET", "/accounts")
-        return [EngineAccount(str(item["id"]), bool(item["authorized"]), item.get("state")) for item in body]
+        return [
+            EngineAccount(str(item["id"]), bool(item["authorized"]), item.get("state"), item.get("limited_until"))
+            for item in body
+        ]
 
     async def start(self, account: str) -> None:
         await self._request("POST", f"/accounts/{account}/chat/start")

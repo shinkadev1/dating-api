@@ -1,5 +1,9 @@
 # Текущая задача
 
+## engine_bridge: failover при лимите аккаунта — 2026-11-11
+
+Задача LoopOS 2026-11-11-engine-limit-failover, ветка `loop/engine-limit-failover` (worktree `.worktrees/vk-bot-engine-limit-failover`). Статус: реализовано, локальный коммит, ждёт ревью; не выкачено, push/merge не выполнялись. Парная часть — chat-engine (state `limited`). Проверки — в [STATE.md](STATE.md).
+
 ## Рассылки из Bot CRM — 2026-11-11
 
 Ветка `feature/broadcasts` от master 410264c. Статус: реализовано и проверено локально, ждёт решения о merge в master (= деплой). Связанная правка — aStormspirit/bot-crm, ветка `feature/broadcasts` (вкладка «Рассылки», прокси `/api/chat`). Перед включением: задать `CHAT_API_CRM_TOKEN` в ENV_FILE (и в Vercel), `CHAT_API_URL`, `CRM_ADMINS`, при Cloudflare Access — service token. Проверки — в STATE.md.

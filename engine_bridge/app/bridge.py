@@ -9,6 +9,8 @@
    стороны закрывает диалог у другой.
 
 Мост считает аккаунты своими: найденный не по его запросу собеседник тоже закрывается.
+Аккаунт в состоянии `limited` (лимит Telegram) не используется: человек остаётся в очереди,
+поиск переходит на другой свободный аккаунт.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from app.engine import EngineClient, EngineConflictError, EngineError
 logger = logging.getLogger(__name__)
 
 _RECONNECT_DELAY_SECONDS = 3.0
+# Аккаунт, на котором chat-engine ответил 409 при старте, не берём в поиск эту минуту.
+_CONFLICT_COOLDOWN_SECONDS = 60.0
 
 _MEDIA_LABELS = {
     "photo": "[фото]",
@@ -83,6 +87,8 @@ class AccountLink:
     state: str | None = None
     # После ухода собеседника в chat-engine ещё приходят реклама и опрос — их не пересылаем.
     closing: bool = False
+    # Момент (loop.time()), до которого аккаунт не берём в поиск после 409.
+    cooldown_until: float = 0.0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task[None] | None = None
 
@@ -196,10 +202,18 @@ class Bridge:
             return
         if kind == "state":
             previous, link.state = link.state, state
+            if previous == "limited" and state == "idle":
+                # Лимит закончился: аккаунт снова свободен, диалога у него не было.
+                link.closing = False
+                self.request_reconcile()
+                return
             if state != previous:
                 await self._on_state(link, state)
             return
         if kind == "message":
+            if state == "limited":
+                await self._apply_state(link, "limited")
+                return
             message = event.get("message") or {}
             photo_id = str(message.get("photo_id") or "")
             video_id = str(message.get("video_id") or "")
@@ -246,6 +260,10 @@ class Bridge:
             else:
                 link.closing = False
             self.request_reconcile()
+        elif link.state == "limited":
+            if phase != "idle":
+                await self._stop_human_side(link)
+            self.request_reconcile()
         elif link.state == "chatting" and phase == "searching":
             await self._on_state(link, "chatting")
         elif link.state != phase:
@@ -271,6 +289,16 @@ class Bridge:
                 await self._stop_engine(link)
         elif state == "idle":
             await self._end_from_engine(link)
+        elif state == "limited":
+            await self._on_limited(link)
+
+    async def _on_limited(self, link: AccountLink) -> None:
+        """Лимит аккаунта: человек остаётся в очереди, поиск переходит на другой аккаунт."""
+        link.closing = False
+        link.state = "limited"
+        logger.warning("Аккаунт %s в лимите chat-engine, снимаю поиск и ищу другой аккаунт", link.id)
+        await self._stop_human_side(link)
+        self.request_reconcile()
 
     async def _end_from_engine(self, link: AccountLink) -> None:
         """Собеседник в chat-engine ушёл: человеку только partner_left, служебные фразы не шлём."""
@@ -378,7 +406,11 @@ class Bridge:
         demand = await self._chat_api.demand()
         need = demand.waiting - demand.hunting
         if need > 0:
-            for link in [link for link in self._links.values() if link.state == "idle"][:need]:
+            now = asyncio.get_running_loop().time()
+            candidates = [
+                link for link in self._links.values() if link.state == "idle" and link.cooldown_until <= now
+            ]
+            for link in candidates[:need]:
                 await self._start_hunt(link)
         elif need < 0:
             for link in [link for link in self._links.values() if link.state == "searching"][:-need]:
@@ -398,6 +430,17 @@ class Bridge:
                 return
             try:
                 await self._engine.start(link.id)
+            except EngineConflictError as exc:
+                logger.warning(
+                    "chat-engine отказал аккаунту %s (409): %s; пауза %.0f с",
+                    link.id,
+                    exc,
+                    _CONFLICT_COOLDOWN_SECONDS,
+                )
+                await self._stop_human_side(link)
+                link.cooldown_until = asyncio.get_running_loop().time() + _CONFLICT_COOLDOWN_SECONDS
+                self.request_reconcile()
+                return
             except EngineError as exc:
                 logger.warning("chat-engine не начал поиск для %s: %s", link.id, exc)
                 await self._stop_human_side(link)

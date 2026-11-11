@@ -23,7 +23,7 @@ VK/TG → REST Chat API → ChatService → SQL/Redis → WebSocket клиент
 | `chat_api/app/db.py` | Повторный запуск всех SQL-файлов из init при старте. |
 | `supabase/init/` | 001_schema.sql, 002_premium_grant.sql, 003_storage_roles.sql, 004_dialog_history.sql: схема, данные, роли для Supabase Storage, история диалогов. |
 | `supabase/gateway/nginx.conf` | Шлюз `storage-gw`: `/storage/v1/*` → `storage:5000` для Studio. |
-| `engine_bridge/app/bridge.py` | demand → hunt → внешний поиск → attach → пересылка. |
+| `engine_bridge/app/bridge.py` | demand → hunt → внешний поиск → attach → пересылка. Аккаунт в `limited` (лимит Telegram) пропускается: hunting снимается, человек остаётся в очереди; 409 на start — пауза аккаунта 60 с (`cooldown_until`). Тесты — `engine_bridge/tests/`. |
 | `docker-compose.yml` | Postgres, Redis, API, bridge, Studio, Supabase Storage (`storage`, `storage-gw`, том `storage_data`), rclone-перенос (`media-migrate`, профиль migrate). |
 | `premium_site/` | Страница оплаты премиума (FastAPI/Jinja, ЮKassa, автопродление `python -m app.scheduler`). Та же база, что у Chat API. |
 | `docker-compose.payments.yml` | Overlay с `premium` и `premium-scheduler` (профиль `payments`). |

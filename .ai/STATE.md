@@ -57,3 +57,7 @@ Untracked `.env.temp` и `rdap.json`. Их содержимое не анали�
 ## Проверка контекста
 
 Документы подготовлены по ранее изученным исходникам и повторно проверенным ветке, HEAD, статусу и AGENTS.md. Проверены наличие шести файлов, локальные Markdown-ссылки, существование путей из таблицы архитектуры и `git diff --check`. Существующие инструкции сохранены; прикладные изменения не добавлены.
+
+## engine_bridge: лимит аккаунта (2026-11-11, не выкачено)
+
+В ветке `loop/engine-limit-failover`: состояние `limited` обрабатывается в `bridge.py`, cooldown 60 с после 409 на start, `EngineAccount.limited_until`. Тесты `engine_bridge/tests/test_bridge_limited.py` (pytest, 7 passed локально). Не проверено против живого chat-engine; нужен релиз chat-engine с `limited`.
