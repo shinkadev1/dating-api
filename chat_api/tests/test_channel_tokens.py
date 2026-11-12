@@ -89,6 +89,21 @@ class CheckTokenTest(unittest.IsolatedAsyncioTestCase):
             await vk_groups.check_token(TOKEN)
         self.assertEqual((ctx.exception.code, ctx.exception.msg), (5, "User authorization failed"))
 
+    async def test_malformed_responses_are_unavailable(self):
+        by_id = {"response": []}, {"response": 5}, {"response": {"groups": []}}, {"response": [{"name": "x"}]}
+        for payload in by_id:
+            with self.subTest(payload=str(payload)), _client(lambda r, p=payload: httpx.Response(200, json=p)):
+                with self.assertRaises(vk_groups.VkUnavailable):
+                    await vk_groups.check_token(TOKEN)
+
+    async def test_non_numeric_error_code(self):
+        def handler(request):
+            return httpx.Response(200, json={"error": {"error_code": "abc", "error_msg": "bad"}})
+
+        with _client(handler), self.assertRaises(vk_groups.VkRejected) as ctx:
+            await vk_groups.check_token(TOKEN)
+        self.assertEqual(ctx.exception.code, 0)
+
     async def test_unavailable(self):
         def boom(request):
             raise httpx.ConnectError("down")

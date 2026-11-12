@@ -307,6 +307,9 @@ min_length() {
     fail "$1 должен быть не короче 32 символов."
   fi
 }
+# Короче 32 знаков Settings не примет, и chat-api не поднимется. Ключ не подменяем молча:
+# новый ключ сделал бы сохранённые ключи сообществ нерасшифровываемыми. Деплой останавливается без вывода значения.
+min_length CHANNEL_TOKEN_KEY
 if [ "$payments" -eq 1 ]; then
   min_length PREMIUM_LINK_SECRET
   min_length PAY_AUTH_SECRET

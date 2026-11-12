@@ -176,6 +176,22 @@ class ChannelsDbTest(unittest.IsolatedAsyncioTestCase):
         r = await self.call("POST", "/channels/vk/check", json={"token": TOKEN_A})
         self.assertEqual((r.json()["connected"], r.json()["enabled"]), (True, True))
 
+    async def test_long_token_is_not_echoed(self):
+        secret = "S3CRET" * 100
+        for path, method, extra in (
+            ("/channels/vk/check", "POST", {}),
+            ("/channels/vk", "POST", {}),
+            ("/channels/vk/10/token", "PUT", {}),
+        ):
+            with self.subTest(path=path):
+                r = await self.call(method, path, json={"token": secret})
+                self.assertEqual(r.status_code, 422)
+                self.assertNotIn("S3CRET", r.text)
+        r = await self.call("POST", "/channels/vk/import", kind="bot", json={"group_id": 1, "token": secret})
+        self.assertEqual(r.status_code, 422)
+        self.assertNotIn("S3CRET", r.text)
+        self.assertEqual(self.checks, [])
+
     async def test_check_errors(self):
         for body in ({"token": ""}, {"token": "   "}, {"token": "x" * 513}, {}):
             with self.subTest(body=str(body)[:20]):

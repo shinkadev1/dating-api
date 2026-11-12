@@ -46,7 +46,11 @@ async def _call(client: httpx.AsyncClient, method: str, token: str, **params: ob
         raise VkUnavailable("неожиданный ответ")
     error = payload.get("error")
     if isinstance(error, dict):
-        raise VkRejected(int(error.get("error_code") or 0), str(error.get("error_msg") or ""))
+        try:
+            code = int(error.get("error_code") or 0)
+        except (TypeError, ValueError):
+            code = 0
+        raise VkRejected(code, str(error.get("error_msg") or ""))
     if "response" not in payload:
         raise VkUnavailable("неожиданный ответ")
     return payload["response"]
@@ -56,14 +60,17 @@ async def check_token(token: str) -> GroupInfo:
     """Возвращает сообщество, которому принадлежит ключ. Ничего не записывает."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         raw = await _call(client, "groups.getById", token, fields="")
-        group = raw[0] if isinstance(raw, list) else (raw.get("groups") or [None])[0]
-        if not isinstance(group, dict) or "id" not in group:
-            raise VkUnavailable("неожиданный ответ")
-        group_id = int(group["id"])
+        try:
+            group = raw[0] if isinstance(raw, list) else raw["groups"][0]
+            group_id = int(group["id"])
+            title = str(group.get("name") or "")
+            photo_url = str(group.get("photo_200") or "")
+        except (IndexError, KeyError, TypeError, ValueError, AttributeError):
+            raise VkUnavailable("неожиданный ответ") from None
         settings = await _call(client, "groups.getLongPollSettings", token, group_id=group_id)
     return GroupInfo(
         group_id=group_id,
-        title=str(group.get("name") or ""),
-        photo_url=str(group.get("photo_200") or ""),
+        title=title,
+        photo_url=photo_url,
         long_poll=bool(isinstance(settings, dict) and settings.get("is_enabled")),
     )

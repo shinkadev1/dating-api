@@ -135,6 +135,13 @@ def _only(client: str, expected: str, who: str) -> None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, f"Нужен токен {who}")
 
 
+def _token(value: str) -> str:
+    """Длина ключа. Текст ошибки не содержит значения: ответ видит CRM."""
+    if not value or len(value) > 512:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Ключ пустой или длиннее 512 знаков")
+    return value
+
+
 def _key(settings: AppSettings) -> str:
     if not settings.channel_token_key:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "CHANNEL_TOKEN_KEY не задан")
@@ -197,7 +204,7 @@ async def list_vk(request: Request, client: CurrentClient) -> list[VkCommunityOu
 async def check_vk(body: VkTokenIn, request: Request, client: CurrentClient) -> VkCheckOut:
     """Спрашивает ВК, чей это ключ и включён ли Long Poll. Ничего не записывает."""
     _only(client, "crm", "CRM")
-    info = await _check(body.token)
+    info = await _check(_token(body.token))
     async with _pool(request).connection() as conn:
         known = await repo.get_vk(conn, info.group_id)
     return VkCheckOut(
@@ -220,7 +227,7 @@ async def connect_vk(body: VkTokenIn, request: Request, client: CurrentClient, s
     """Проверяет ключ, шифрует и сохраняет. Сообщество включается; бот подхватит его в течение минуты."""
     _only(client, "crm", "CRM")
     secret = _key(settings)
-    info = await _check(body.token)
+    info = await _check(_token(body.token))
     sealed = channel_tokens.encrypt(secret, info.group_id, body.token)
     async with _pool(request).connection() as conn:
         row = await repo.connect_vk(
@@ -267,6 +274,7 @@ async def import_vk(body: VkImportIn, request: Request, client: CurrentClient, s
     """Бот переносит в CRM ключи из VK_TOKEN(S). Существующий ключ и переключатель не меняются."""
     _only(client, "bot", "бота")
     secret = _key(settings)
+    _token(body.token)
     async with _pool(request).connection() as conn:
         stored = await repo.import_token(
             conn,
@@ -301,10 +309,11 @@ async def replace_vk_token(
 ) -> VkCommunityOut:
     _only(client, "crm", "CRM")
     secret = _key(settings)
+    _token(body.token)
     async with _pool(request).connection() as conn:
         if await repo.get_vk(conn, group_id) is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Сообщества нет")
-    info = await _check(body.token)
+    info = await _check(_token(body.token))
     if info.group_id != group_id:
         raise HTTPException(status.HTTP_409_CONFLICT, "Ключ от другого сообщества")
     async with _pool(request).connection() as conn:

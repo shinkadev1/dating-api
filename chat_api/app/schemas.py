@@ -64,7 +64,8 @@ VkStatus = Literal["ok", "error", "disabled", "unknown"]
 
 
 class VkTokenIn(BaseModel):
-    token: str = Field(min_length=1, max_length=512, description="Ключ доступа сообщества ВК")
+    # Длину проверяет роутер (_token): ошибка pydantic вернула бы введённый ключ в поле input.
+    token: str = Field(description="Ключ доступа сообщества ВК, 1..512 знаков")
 
     @field_validator("token", mode="before")
     @classmethod
