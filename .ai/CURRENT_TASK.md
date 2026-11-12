@@ -1,5 +1,9 @@
 # Текущая задача
 
+## Пост «купи премиум» после каждого 10-го диалога — 2026-11-12
+
+Задача LoopOS 2026-11-12-promo-every-10, ветка `loop/promo-every-10` (worktree `.worktrees/vk-bot-promo-every-10`). Статус: серверная часть реализована, локальный коммит, ждёт ревью; не выкачено, push/merge не выполнялись. Порядок выкатки: dating-bot-vk, dating-bot-tg, затем vk-bot (боты со старым кодом неизвестный тип пропускают). Выпуск делает оркестратор. Проверки — в [STATE.md](STATE.md).
+
 ## engine_bridge: failover при лимите аккаунта — 2026-11-11
 
 Задача LoopOS 2026-11-11-engine-limit-failover, ветка `loop/engine-limit-failover` (worktree `.worktrees/vk-bot-engine-limit-failover`). Статус: реализовано, локальный коммит, ждёт ревью; не выкачено, push/merge не выполнялись. Парная часть — chat-engine (state `limited`). Проверки — в [STATE.md](STATE.md).

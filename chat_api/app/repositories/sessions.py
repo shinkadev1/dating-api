@@ -20,6 +20,14 @@ class SessionRow:
     dialog_id: int | None = None
 
 
+@dataclass(frozen=True)
+class DialogEnd:
+    """Сторона только что закрытого диалога и её счётчик завершённых диалогов."""
+
+    peer: Peer
+    dialogs_ended: int
+
+
 def _key(peer: Peer) -> dict[str, Any]:
     return peer.as_dict()
 
@@ -77,12 +85,13 @@ async def _close_open_dialog(
     peer: Peer,
     reason: str,
     ended_by: Peer | None,
-) -> None:
+) -> list[DialogEnd]:
     """Закрывает открытый диалог сессии peer. Уже закрытый не перезаписывается.
 
     ended_by — кто закончил диалог; None — закрыл сервис (NULL в ended_by).
+    Если диалог закрыт именно сейчас, каждому человеку (не chat-engine) +1 к dialogs_ended.
     """
-    await conn.execute(
+    cursor = await conn.execute(
         """
         UPDATE dialogs AS d
         SET ended_at = NOW(),
@@ -97,6 +106,7 @@ async def _close_open_dialog(
         FROM chat_sessions AS s
         WHERE s.platform = %(platform)s AND s.bot_key = %(bot_key)s AND s.user_id = %(user_id)s
           AND d.id = s.dialog_id AND d.ended_at IS NULL
+        RETURNING d.a_platform, d.a_bot_key, d.a_user_id, d.b_platform, d.b_bot_key, d.b_user_id
         """,
         {
             **_key(peer),
@@ -106,11 +116,31 @@ async def _close_open_dialog(
             "by_user_id": ended_by.user_id if ended_by else None,
         },
     )
+    row = await cursor.fetchone()
+    if row is None:
+        return []
+    ended: list[DialogEnd] = []
+    for side in ("a", "b"):
+        side_peer = Peer(row[f"{side}_platform"], row[f"{side}_bot_key"] or "", int(row[f"{side}_user_id"]))
+        if side_peer.is_engine:
+            continue
+        counter = await conn.execute(
+            """
+            UPDATE bot_users SET dialogs_ended = dialogs_ended + 1
+            WHERE platform = %(platform)s AND user_id = %(user_id)s
+            RETURNING dialogs_ended
+            """,
+            {"platform": side_peer.platform, "user_id": side_peer.user_id},
+        )
+        counted = await counter.fetchone()
+        if counted is not None:
+            ended.append(DialogEnd(side_peer, int(counted["dialogs_ended"])))
+    return ended
 
 
-async def set_idle(conn: AsyncConnection, peer: Peer, *, reason: str, ended_by: Peer | None) -> None:
+async def set_idle(conn: AsyncConnection, peer: Peer, *, reason: str, ended_by: Peer | None) -> list[DialogEnd]:
     """Снимает сессию в idle и закрывает её открытый диалог с причиной reason."""
-    await _close_open_dialog(conn, peer, reason, ended_by)
+    ended = await _close_open_dialog(conn, peer, reason, ended_by)
     await conn.execute(
         """
         UPDATE chat_sessions
@@ -120,10 +150,11 @@ async def set_idle(conn: AsyncConnection, peer: Peer, *, reason: str, ended_by: 
         """,
         _key(peer),
     )
+    return ended
 
 
-async def set_searching(conn: AsyncConnection, peer: Peer) -> None:
-    await _close_open_dialog(conn, peer, "stopped", None)
+async def set_searching(conn: AsyncConnection, peer: Peer) -> list[DialogEnd]:
+    ended = await _close_open_dialog(conn, peer, "stopped", None)
     await conn.execute(
         """
         INSERT INTO chat_sessions (platform, bot_key, user_id, phase, searching_since)
@@ -139,6 +170,7 @@ async def set_searching(conn: AsyncConnection, peer: Peer) -> None:
         """,
         _key(peer),
     )
+    return ended
 
 
 async def set_chatting(conn: AsyncConnection, peer: Peer, partner: Peer, dialog_id: int) -> None:

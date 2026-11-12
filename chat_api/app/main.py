@@ -80,6 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         hub_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await hub_task
+        await app.state.chat.aclose()
         await storage.close()
         await redis.aclose()
         await pool.close()

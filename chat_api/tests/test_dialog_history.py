@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import unittest
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from app.peer import Peer
+from app.schemas import ChatEvent
 from app.repositories import sessions as sessions_repo
 from app.services import chat as chat_module
 from app.services.chat import ChatService, NotChattingError
@@ -55,6 +57,12 @@ class Repo:
         self.searcher: Peer | None = None
         self.with_engine: tuple[Peer, Peer] | None = None
         self.waiting: Peer | None = None
+        # Что вернёт set_idle/set_searching для peer (один раз): закрытые диалоги со счётчиками.
+        self.ends: dict[Peer, list[sessions_repo.DialogEnd]] = {}
+        self.premium: set[Peer] = set()
+
+    async def user_is_premium(self, conn: object, peer: Peer) -> bool:
+        return peer in self.premium
 
     async def lock_matchmaking(self, conn: object) -> None:
         pass
@@ -62,11 +70,15 @@ class Repo:
     async def get_session(self, conn: object, peer: Peer):  # type: ignore[no-untyped-def]
         return self.sessions.get(peer)
 
-    async def set_idle(self, conn: object, peer: Peer, *, reason: str, ended_by: Peer | None) -> None:
+    async def set_idle(
+        self, conn: object, peer: Peer, *, reason: str, ended_by: Peer | None
+    ) -> list[sessions_repo.DialogEnd]:
         self.calls.append(("idle", peer, reason, ended_by))
+        return self.ends.pop(peer, [])
 
-    async def set_searching(self, conn: object, peer: Peer) -> None:
+    async def set_searching(self, conn: object, peer: Peer) -> list[sessions_repo.DialogEnd]:
         self.calls.append(("searching", peer))
+        return self.ends.pop(peer, [])
 
     async def record_search(self, conn: object, peer: Peer) -> None:
         pass
@@ -108,6 +120,7 @@ def make_service() -> tuple[ChatService, FakeEvents]:
     service._events = events  # type: ignore[attr-defined]
     service._engine_enabled = True  # type: ignore[attr-defined]
     service._fallback_after = 0.0  # type: ignore[attr-defined]
+    service._promo_tasks = set()  # type: ignore[attr-defined]
     return service, events
 
 
@@ -121,8 +134,14 @@ def idle() -> sessions_repo.SessionRow:
 
 async def run_with(repo: Repo, rec: Recorder, call):  # type: ignore[no-untyped-def]
     service, events = make_service()
-    with patch.object(chat_module, "repo", repo), patch.object(chat_module, "messages_repo", rec):
+    with (
+        patch.object(chat_module, "repo", repo),
+        patch.object(chat_module, "messages_repo", rec),
+        patch.object(chat_module, "PROMO_DELAY_SECONDS", 0),
+    ):
         result = await call(service)
+        if service._promo_tasks:  # type: ignore[attr-defined]
+            await asyncio.gather(*service._promo_tasks)  # type: ignore[attr-defined]
     return result, events
 
 
@@ -185,6 +204,107 @@ class DialogLifecycleTests(unittest.IsolatedAsyncioTestCase):
         await run_with(repo, Recorder(), lambda s: s.delivery_failed(A))
         self.assertIn(("idle", A, "undeliverable", A), repo.calls)
         self.assertIn(("idle", B, "undeliverable", A), repo.calls)
+
+
+def ends(*pairs: tuple[Peer, int]) -> list[sessions_repo.DialogEnd]:
+    return [sessions_repo.DialogEnd(peer, count) for peer, count in pairs]
+
+
+def promo_peers(events: FakeEvents) -> list[Peer]:
+    return [peer for peer, event in events.published if getattr(event, "type", None) == "promo"]
+
+
+class PromoTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tenth_dialog_promo_after_partner_left(self) -> None:
+        repo = Repo({A: chatting(B), B: chatting(A)})
+        repo.ends[A] = ends((A, 10), (B, 10))
+        _, events = await run_with(repo, Recorder(), lambda s: s.stop(A))
+        kinds = [(peer, event.type) for peer, event in events.published]
+        self.assertEqual(kinds[0], (B, "partner_left"))
+        self.assertEqual(kinds[1:], [(A, "promo"), (B, "promo")])
+
+    async def test_ninth_and_eleventh_have_no_promo(self) -> None:
+        for first, second in ((9, 9), (11, 11), (9, 11)):
+            repo = Repo({A: chatting(B), B: chatting(A)})
+            repo.ends[A] = ends((A, first), (B, second))
+            _, events = await run_with(repo, Recorder(), lambda s: s.stop(A))
+            self.assertEqual(promo_peers(events), [])
+
+    async def test_only_side_at_tenth_gets_promo(self) -> None:
+        repo = Repo({A: chatting(B), B: chatting(A)})
+        repo.ends[A] = ends((A, 9), (B, 20))
+        _, events = await run_with(repo, Recorder(), lambda s: s.stop(A))
+        self.assertEqual(promo_peers(events), [B])
+
+    async def test_premium_gets_no_promo(self) -> None:
+        repo = Repo({A: chatting(B), B: chatting(A)})
+        repo.ends[A] = ends((A, 10), (B, 10))
+        repo.premium = {A}
+        _, events = await run_with(repo, Recorder(), lambda s: s.stop(A))
+        self.assertEqual(promo_peers(events), [B])
+
+    async def test_web_and_engine_get_no_promo(self) -> None:
+        web = Peer("web", "site", 5)
+        repo = Repo({A: chatting(web), web: chatting(A)})
+        repo.ends[A] = ends((A, 9), (web, 10))
+        _, events = await run_with(repo, Recorder(), lambda s: s.stop(A))
+        self.assertEqual(promo_peers(events), [])
+        repo = Repo({A: chatting(ENGINE), ENGINE: chatting(A)})
+        repo.ends[A] = ends((A, 9), (ENGINE, 10))
+        _, events = await run_with(repo, Recorder(), lambda s: s.stop(A))
+        self.assertEqual(promo_peers(events), [])
+
+    async def test_stolen_from_engine_gets_no_promo(self) -> None:
+        repo = Repo()
+        repo.with_engine = (B, ENGINE)
+        repo.ends[ENGINE] = ends((B, 10))
+        _, events = await run_with(repo, Recorder(), lambda s: s.search(A))
+        self.assertEqual(promo_peers(events), [])
+
+    async def test_next_dialog_promo_to_initiator_and_partner(self) -> None:
+        repo = Repo({A: chatting(B), B: chatting(A)})
+        repo.ends[A] = ends((A, 10), (B, 10))
+        _, events = await run_with(repo, Recorder(), lambda s: s.search(A))
+        self.assertEqual(promo_peers(events), [A, B])
+
+    async def test_delivery_failed_promo_only_to_partner(self) -> None:
+        repo = Repo({A: chatting(B), B: chatting(A)})
+        repo.ends[A] = ends((A, 10), (B, 10))
+        _, events = await run_with(repo, Recorder(), lambda s: s.delivery_failed(A))
+        self.assertEqual(promo_peers(events), [B])
+
+    async def test_publish_error_is_logged_not_raised(self) -> None:
+        repo = Repo({A: chatting(B), B: chatting(A)})
+        repo.ends[A] = ends((A, 10), (B, 10))
+        service, events = make_service()
+
+        async def publish(peer: Peer, event: ChatEvent) -> None:
+            if event.type == "promo":
+                raise RuntimeError("redis недоступен")
+            events.published.append((peer, event))
+
+        events.publish = publish  # type: ignore[method-assign]
+        with (
+            patch.object(chat_module, "repo", repo),
+            patch.object(chat_module, "PROMO_DELAY_SECONDS", 0),
+            self.assertLogs(chat_module.logger, level=logging.WARNING) as logs,
+        ):
+            await service.stop(A)
+            await asyncio.gather(*service._promo_tasks)  # type: ignore[attr-defined]
+        self.assertIn("RuntimeError", "\n".join(logs.output))
+
+    async def test_no_tasks_without_targets_and_aclose_cancels(self) -> None:
+        repo = Repo({A: chatting(B), B: chatting(A)})
+        service, events = make_service()
+        with patch.object(chat_module, "repo", repo):
+            await service.stop(A)
+            self.assertEqual(service._promo_tasks, set())  # type: ignore[attr-defined]
+            repo.sessions = {A: chatting(B), B: chatting(A)}
+            repo.ends[A] = ends((A, 10))
+            await service.stop(A)
+            self.assertEqual(len(service._promo_tasks), 1)  # type: ignore[attr-defined]
+            await service.aclose()
+        self.assertEqual(promo_peers(events), [])
 
 
 class RecordingTests(unittest.IsolatedAsyncioTestCase):

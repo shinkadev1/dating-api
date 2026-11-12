@@ -84,8 +84,8 @@ class MediaOut(BaseModel):
 class ChatEvent(BaseModel):
     """Событие для второй стороны. Инициатор узнаёт итог из HTTP-ответа."""
 
-    type: Literal["partner_found", "message", "partner_left", "notice", "media"]
-    text: str | None = Field(None, description="Текст для `message` и `notice`")
+    type: Literal["partner_found", "message", "partner_left", "notice", "media", "promo"]
+    text: str | None = Field(None, description="Текст для `message` и `notice`. `promo` — предложение премиума после каждого 10-го диалога, без полей")
     reason: LeftReason | None = Field(None, description="Причина для `partner_left`")
     media_id: str | None = Field(None, description="Файл для `media`. Байты забирает бот собеседника")
     kind: MediaKind | None = Field(None, description="Вид файла для `media`")
