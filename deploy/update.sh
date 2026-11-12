@@ -114,6 +114,8 @@ default_env() {
 }
 
 ensure_secret CHAT_API_SERVICE_TOKEN
+# Шифрует ключи сообществ ВК, добавленные из CRM. Менять нельзя: старые ключи не расшифруются.
+ensure_secret CHANNEL_TOKEN_KEY
 require_secret CHAT_API_APP_TOKEN
 require_secret CLOUDFLARE_TUNNEL_TOKEN
 

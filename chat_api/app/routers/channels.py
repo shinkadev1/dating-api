@@ -2,16 +2,36 @@
 
 from __future__ import annotations
 
+import logging
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
-from app.deps import CLIENT_PLATFORMS, Chat, CurrentClient, MediaSvc
+from app import channel_tokens, vk_groups
+from app.deps import CLIENT_PLATFORMS, AppSettings, Chat, CurrentClient, MediaSvc
 from app.media_types import MAX_BYTES, MediaRejected
 from app.peer import Peer
-from app.schemas import ChannelIn, NoticeIn, NoticeOut
+from app.repositories import channels as repo
+from app.schemas import (
+    ChannelIn,
+    NoticeIn,
+    NoticeOut,
+    VkCheckOut,
+    VkCommunityOut,
+    VkEnabledIn,
+    VkImportIn,
+    VkImportOut,
+    VkStatusIn,
+    VkTokenIn,
+    VkTokenItem,
+    VkTokensOut,
+)
 from app.services.media import StorageDisabled
 from app.services.storage import StorageError
+
+logger = logging.getLogger(__name__)
 
 # Одно фото на всю рассылку. К диалогу человека оно не привязано.
 _BROADCAST_PEER = Peer("web", "broadcast", 0)
@@ -104,3 +124,213 @@ async def _read_notice(request: Request) -> tuple[str, bytes | None]:
 def _require_text(text: str) -> None:
     if not text or len(text) > 4096:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Нужен текст уведомления до 4096 символов")
+
+
+# ---------- сообщества ВК, которыми управляет CRM ----------
+# Полный ключ получает только бот (GET /channels/vk/tokens); CRM видит подсказку token_hint.
+
+
+def _only(client: str, expected: str, who: str) -> None:
+    if client != expected:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, f"Нужен токен {who}")
+
+
+def _key(settings: AppSettings) -> str:
+    if not settings.channel_token_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "CHANNEL_TOKEN_KEY не задан")
+    return settings.channel_token_key
+
+
+def _pool(request: Request):
+    return request.app.state.pool
+
+
+def _community(row: dict[str, Any]) -> VkCommunityOut:
+    if not row["enabled"]:
+        state = "disabled"
+    elif row["status"] in ("ok", "error"):
+        state = row["status"]
+    else:
+        state = "unknown"
+    return VkCommunityOut(
+        group_id=int(row["group_id"]),
+        title=row["title"],
+        photo_url=row["photo_url"],
+        token_hint=row["token_hint"],
+        has_token=bool(row["has_token"]),
+        enabled=bool(row["enabled"]),
+        status=state,
+        error=row["status_error"],
+        last_seen_at=row["last_seen_at"],
+    )
+
+
+async def _check(token: str) -> vk_groups.GroupInfo:
+    try:
+        return await vk_groups.check_token(token)
+    except vk_groups.VkRejected as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, f"Ключ не подошёл: {exc.msg} (код {exc.code})"
+        ) from None
+    except vk_groups.VkUnavailable as exc:
+        logger.warning("ВК не ответил при проверке ключа: %s", exc)
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "ВК недоступен, попробуйте позже") from None
+
+
+_VK_RESPONSES: dict[int | str, dict[str, Any]] = {
+    status.HTTP_422_UNPROCESSABLE_ENTITY: {"description": "Ключ пустой, длиннее 512 знаков или ВК его отклонил"},
+    status.HTTP_502_BAD_GATEWAY: {"description": "ВК недоступен"},
+    status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "CHANNEL_TOKEN_KEY не задан"},
+}
+
+
+@router.get("/channels/vk", summary="Сообщества ВК")
+async def list_vk(request: Request, client: CurrentClient) -> list[VkCommunityOut]:
+    """Подключённые сообщества: название, подсказка ключа, включено ли, статус бота. Токен CRM или бота."""
+    if client not in ("crm", "bot"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Нужен токен CRM или сервисный токен бота")
+    async with _pool(request).connection() as conn:
+        return [_community(row) for row in await repo.list_vk(conn)]
+
+
+@router.post("/channels/vk/check", summary="Проверить ключ сообщества", responses=_VK_RESPONSES)
+async def check_vk(body: VkTokenIn, request: Request, client: CurrentClient) -> VkCheckOut:
+    """Спрашивает ВК, чей это ключ и включён ли Long Poll. Ничего не записывает."""
+    _only(client, "crm", "CRM")
+    info = await _check(body.token)
+    async with _pool(request).connection() as conn:
+        known = await repo.get_vk(conn, info.group_id)
+    return VkCheckOut(
+        group_id=info.group_id,
+        title=info.title,
+        photo_url=info.photo_url,
+        long_poll=info.long_poll,
+        connected=known is not None,
+        enabled=bool(known["enabled"]) if known else None,
+    )
+
+
+@router.post(
+    "/channels/vk",
+    status_code=status.HTTP_201_CREATED,
+    summary="Подключить сообщество",
+    responses=_VK_RESPONSES,
+)
+async def connect_vk(body: VkTokenIn, request: Request, client: CurrentClient, settings: AppSettings) -> VkCommunityOut:
+    """Проверяет ключ, шифрует и сохраняет. Сообщество включается; бот подхватит его в течение минуты."""
+    _only(client, "crm", "CRM")
+    secret = _key(settings)
+    info = await _check(body.token)
+    sealed = channel_tokens.encrypt(secret, info.group_id, body.token)
+    async with _pool(request).connection() as conn:
+        row = await repo.connect_vk(
+            conn,
+            info.group_id,
+            title=info.title,
+            photo_url=info.photo_url,
+            token_encrypted=sealed,
+            token_hint=channel_tokens.hint(body.token),
+        )
+    return _community(row)
+
+
+@router.get(
+    "/channels/vk/tokens",
+    summary="Ключи включённых сообществ",
+    responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "CHANNEL_TOKEN_KEY не задан"}},
+)
+async def vk_tokens(request: Request, client: CurrentClient, settings: AppSettings) -> VkTokensOut:
+    """Для бота ВК: включённые сообщества с ключами и id отключённых. Только сервисный токен бота."""
+    _only(client, "bot", "бота")
+    secret = _key(settings)
+    async with _pool(request).connection() as conn:
+        rows = await repo.enabled_tokens(conn)
+        disabled = await repo.disabled_ids(conn)
+    communities: list[VkTokenItem] = []
+    for row in rows:
+        group_id = int(row["group_id"])
+        try:
+            token = channel_tokens.decrypt(secret, group_id, row["token_encrypted"])
+        except channel_tokens.TokenDecryptError:
+            logger.error("Ключ сообщества %s не расшифровался: пропускаю", group_id)
+            continue
+        communities.append(VkTokenItem(group_id=group_id, title=row["title"], token=token))
+    return VkTokensOut(communities=communities, disabled=disabled)
+
+
+@router.post(
+    "/channels/vk/import",
+    summary="Сохранить ключ из окружения бота",
+    responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "CHANNEL_TOKEN_KEY не задан"}},
+)
+async def import_vk(body: VkImportIn, request: Request, client: CurrentClient, settings: AppSettings) -> VkImportOut:
+    """Бот переносит в CRM ключи из VK_TOKEN(S). Существующий ключ и переключатель не меняются."""
+    _only(client, "bot", "бота")
+    secret = _key(settings)
+    async with _pool(request).connection() as conn:
+        stored = await repo.import_token(
+            conn,
+            body.group_id,
+            title=body.title.strip(),
+            token_encrypted=channel_tokens.encrypt(secret, body.group_id, body.token),
+            token_hint=channel_tokens.hint(body.token),
+        )
+    return VkImportOut(stored=stored)
+
+
+@router.post("/channels/vk/status", status_code=status.HTTP_204_NO_CONTENT, summary="Статус сообществ от бота")
+async def vk_status(body: VkStatusIn, request: Request, client: CurrentClient) -> None:
+    """Бот сообщает, работает ли сообщество. Неизвестные сообщества игнорируются."""
+    _only(client, "bot", "бота")
+    items = [(item.group_id, item.status, item.error) for item in body.items]
+    async with _pool(request).connection() as conn:
+        await repo.report_status(conn, items)
+
+
+@router.put(
+    "/channels/vk/{group_id}/token",
+    summary="Заменить ключ сообщества",
+    responses={
+        **_VK_RESPONSES,
+        status.HTTP_404_NOT_FOUND: {"description": "Сообщества нет"},
+        status.HTTP_409_CONFLICT: {"description": "Ключ от другого сообщества"},
+    },
+)
+async def replace_vk_token(
+    group_id: int, body: VkTokenIn, request: Request, client: CurrentClient, settings: AppSettings
+) -> VkCommunityOut:
+    _only(client, "crm", "CRM")
+    secret = _key(settings)
+    async with _pool(request).connection() as conn:
+        if await repo.get_vk(conn, group_id) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Сообщества нет")
+    info = await _check(body.token)
+    if info.group_id != group_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Ключ от другого сообщества")
+    async with _pool(request).connection() as conn:
+        row = await repo.replace_token(
+            conn,
+            group_id,
+            title=info.title,
+            photo_url=info.photo_url,
+            token_encrypted=channel_tokens.encrypt(secret, group_id, body.token),
+            token_hint=channel_tokens.hint(body.token),
+        )
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Сообщества нет")
+    return _community(row)
+
+
+@router.patch(
+    "/channels/vk/{group_id}",
+    summary="Включить или отключить сообщество",
+    responses={status.HTTP_404_NOT_FOUND: {"description": "Сообщества нет"}},
+)
+async def toggle_vk(group_id: int, body: VkEnabledIn, request: Request, client: CurrentClient) -> VkCommunityOut:
+    """Отключённое сообщество не получает рассылки и уведомления, бот его останавливает. Данные остаются."""
+    _only(client, "crm", "CRM")
+    async with _pool(request).connection() as conn:
+        row = await repo.set_enabled(conn, group_id, body.enabled)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Сообщества нет")
+    return _community(row)

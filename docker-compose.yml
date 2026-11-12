@@ -71,6 +71,8 @@ services:
       CHAT_API_TG_TOKEN: ${CHAT_API_TG_TOKEN:-}
       # Bot CRM (Vercel): только рассылки /api/v1/broadcasts.
       CHAT_API_CRM_TOKEN: ${CHAT_API_CRM_TOKEN:-}
+      # Шифрует ключи сообществ ВК, добавленные из CRM. Без него /channels/vk отвечает 503.
+      CHANNEL_TOKEN_KEY: ${CHANNEL_TOKEN_KEY:-}
       ENGINE_FALLBACK_AFTER_SECONDS: ${ENGINE_FALLBACK_AFTER_SECONDS:-0}
       STATS_ONLINE_WINDOW_SECONDS: ${STATS_ONLINE_WINDOW_SECONDS:-300}
       # Медиа лежат в Supabase Storage (S3-протокол, бакет chat-media). Другое S3-хранилище можно задать MEDIA_S3_* в .env сервера.

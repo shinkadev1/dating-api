@@ -353,7 +353,7 @@ async def channel_recipients(conn: AsyncConnection) -> list[Peer]:
         SELECT channel.platform, channel.external_id, link.user_id
         FROM user_channels AS link
         JOIN channels AS channel ON channel.id = link.channel_id
-        WHERE channel.platform IN ('vk', 'tg', 'web')
+        WHERE channel.platform IN ('vk', 'tg', 'web') AND channel.enabled
         ORDER BY channel.platform, channel.external_id, link.user_id
         """
     )

@@ -75,6 +75,28 @@ Bot CRM (вкладка «Рассылки») управляет рассылк�
 | PUT / DELETE | `/broadcasts/{id}/image` | фото к рассылке (multipart `file`) / убрать |
 | DELETE | `/broadcasts/{id}` | удалить вместе с журналом (не во время отправки) |
 
+## Сообщества ВК из CRM
+
+Bot CRM (вкладка «Сообщества») подключает сообщества ВК без правки секретов. Ключ сообщества хранится в
+`channels.token_encrypted` в виде `v1:` + base64(nonce + AES-256-GCM), ключ шифрования — SHA-256 от
+`CHANNEL_TOKEN_KEY` (на сервере его создаёт `deploy/update.sh`; не менять: старые ключи не расшифруются).
+AAD = `vk:<group_id>`. Без `CHANNEL_TOKEN_KEY` маршруты записи и выдачи ключей отвечают 503. Полный ключ
+получает только бот (`GET /channels/vk/tokens`), CRM видит `token_hint` («vk1.a.…Qx7f»); в логи ключ не пишется.
+
+| Метод | Путь | Кто | Что делает |
+|---|---|---|---|
+| GET | `/channels/vk` | crm, bot | список: `group_id`, `title`, `photo_url`, `token_hint`, `has_token`, `enabled`, `status` (`ok`/`error`/`disabled`/`unknown`), `error`, `last_seen_at` |
+| POST | `/channels/vk/check` `{token}` | crm | спрашивает ВК (`groups.getById`, `groups.getLongPollSettings`), ничего не пишет; 422 с текстом ВК, 502 если ВК недоступен |
+| POST | `/channels/vk` `{token}` | crm | проверка + запись, сообщество включается (201) |
+| PUT | `/channels/vk/{group_id}/token` `{token}` | crm | замена ключа; ключ другого сообщества — 409, нет сообщества — 404 |
+| PATCH | `/channels/vk/{group_id}` `{enabled}` | crm | включить/отключить; отключённое не получает `/notifications` и рассылки, ключ и данные остаются |
+| GET | `/channels/vk/tokens` | bot | `{communities: [{group_id, title, token}], disabled: [group_id]}` — только включённые с ключом |
+| POST | `/channels/vk/import` `{group_id, title, token}` | bot | переносит ключ из окружения бота; существующий ключ и `enabled` не трогает; `{stored}` |
+| POST | `/channels/vk/status` `{items: [{group_id, status, error}]}` | bot | статус работы бота (≤200), обновляет `last_seen_at` (204) |
+
+Колонки добавляет `supabase/init/009_channel_tokens.sql` (только `ADD COLUMN IF NOT EXISTS`; старые строки
+`enabled = TRUE`, `status = 'unknown'`). `POST /channels` бота работает как раньше.
+
 ## Аналитика и люди для CRM
 
 Только чтение, тот же доступ, что у рассылок (`CHAT_API_CRM_TOKEN` или сервисный токен бота). Дни — по Москве.

@@ -74,7 +74,7 @@ async def audience(conn: AsyncConnection, platforms: list[str]) -> int:
         SELECT COUNT(*) AS n
         FROM user_channels link
         JOIN channels ch ON ch.id = link.channel_id
-        WHERE ch.platform = ANY(%(platforms)s) AND link.user_platform = ch.platform
+        WHERE ch.platform = ANY(%(platforms)s) AND ch.enabled AND link.user_platform = ch.platform
         """,
         {"platforms": platforms},
     )
@@ -132,6 +132,7 @@ async def claim_scheduled(conn: AsyncConnection, broadcast: dict[str, Any], *, l
             FROM user_channels link
             JOIN channels ch ON ch.id = link.channel_id
             WHERE ch.platform = ANY(%(platforms)s)
+              AND ch.enabled
               AND link.user_platform = ch.platform
               AND NOT EXISTS (
                   SELECT 1 FROM broadcast_log log
@@ -181,7 +182,7 @@ async def claim_event(
             FROM user_channels link
             JOIN channels ch ON ch.id = link.channel_id
             LEFT JOIN bot_users bu ON bu.platform = link.user_platform AND bu.user_id = link.user_id
-            WHERE ch.platform = ANY(%(platforms)s) AND link.user_platform = ch.platform
+            WHERE ch.platform = ANY(%(platforms)s) AND ch.enabled AND link.user_platform = ch.platform
         ),
         candidates AS (
             SELECT cand.user_platform, cand.user_id, cand.channel_id, cand.event_at

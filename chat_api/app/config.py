@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     premium_link_secret: str | None = Field(None, min_length=32)
     pay_public_url: str = "https://pay.chatwithyou.site"
 
+    # Ключ шифрования ключей сообществ ВК, добавленных из CRM (/channels/vk). Без него эти маршруты отвечают 503.
+    channel_token_key: str | None = Field(None, min_length=32)
+
     @field_validator(
         "chat_api_engine_token",
         "chat_api_tg_token",
@@ -53,6 +56,7 @@ class Settings(BaseSettings):
         "s3_access_key",
         "s3_secret_key",
         "premium_link_secret",
+        "channel_token_key",
         mode="before",
     )
     @classmethod

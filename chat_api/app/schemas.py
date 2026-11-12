@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 Phase = Literal["idle", "searching", "chatting"]
 LeftReason = Literal["stopped", "reported", "undeliverable"]
@@ -58,6 +58,73 @@ class ChannelIn(BaseModel):
     platform: Literal["vk", "tg", "web"]
     external_id: str = Field(min_length=1, max_length=64, description="Id сообщества ВК, бота Telegram или site")
     title: str = Field(default="", max_length=255, description="Название чата. Пустое не затирает уже записанное")
+
+
+VkStatus = Literal["ok", "error", "disabled", "unknown"]
+
+
+class VkTokenIn(BaseModel):
+    token: str = Field(min_length=1, max_length=512, description="Ключ доступа сообщества ВК")
+
+    @field_validator("token", mode="before")
+    @classmethod
+    def _strip(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class VkCommunityOut(BaseModel):
+    group_id: int
+    title: str
+    photo_url: str
+    token_hint: str = Field(description="Начало и конец ключа; полный ключ CRM не получает")
+    has_token: bool
+    enabled: bool
+    status: VkStatus = Field(description="`disabled` при выключенном сообществе")
+    error: str = ""
+    last_seen_at: datetime | None = None
+
+
+class VkCheckOut(BaseModel):
+    group_id: int
+    title: str
+    photo_url: str
+    long_poll: bool = Field(description="Long Poll включён в сообществе")
+    connected: bool = Field(description="Сообщество уже есть в CRM")
+    enabled: bool | None = Field(description="Включено ли оно; null, если не подключено")
+
+
+class VkTokenItem(BaseModel):
+    group_id: int
+    title: str
+    token: str
+
+
+class VkTokensOut(BaseModel):
+    communities: list[VkTokenItem]
+    disabled: list[int]
+
+
+class VkImportIn(VkTokenIn):
+    group_id: int = Field(gt=0)
+    title: str = Field(default="", max_length=255)
+
+
+class VkImportOut(BaseModel):
+    stored: bool
+
+
+class VkEnabledIn(BaseModel):
+    enabled: bool
+
+
+class VkStatusItem(BaseModel):
+    group_id: int = Field(gt=0)
+    status: Literal["ok", "error"]
+    error: str = Field(default="", max_length=2000)
+
+
+class VkStatusIn(BaseModel):
+    items: list[VkStatusItem] = Field(max_length=200)
 
 
 class StopOut(BaseModel):
