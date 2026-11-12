@@ -5,15 +5,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+import random
+from datetime import datetime, time, timedelta, timezone
 from typing import Any
 
 from psycopg_pool import AsyncConnectionPool
 
 from app.broadcasts import settings
 from app.events import EventBus
-from app.reminders.service import is_quiet
+from app.reminders.service import _MSK, is_quiet
 from app.repositories import broadcasts as repo
+from app.repositories import daily_promo as promo_repo
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +35,19 @@ class BroadcastService:
         *,
         clock: Callable[[], datetime] = _utcnow,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        daily_promo: bool = False,
+        rand: Callable[[], float] = random.random,
     ) -> None:
         self._pool = pool
         self._events = events
         self._clock = clock
         self._sleep = sleep
+        self._daily_promo = daily_promo
+        self._rand = rand
 
     async def run(self) -> None:
         logger.info("Рассылки: проверка раз в %s с", settings.CHECK_EVERY_SECONDS)
+        logger.info("Ежедневная рассылка: %s", "включена" if self._daily_promo else "выключена")
         while True:
             try:
                 await self.run_once()
@@ -66,6 +73,8 @@ class BroadcastService:
                 if not is_quiet(now, settings.QUIET_HOURS_MSK):
                     for broadcast in await repo.active_events(conn):
                         sent += await self._send_event(conn, broadcast, now)
+                if self._daily_promo:
+                    sent += await self._send_daily(conn, now)
             finally:
                 await conn.execute("SELECT pg_advisory_unlock(%s)", (_LOCK_ID,))
         return sent
@@ -131,3 +140,39 @@ class BroadcastService:
         except Exception:
             logger.exception("Рассылка %s: пачка отменена, продолжу в следующий проход", bid)
             return None
+
+    async def _send_daily(self, conn, now: datetime) -> int:
+        """Ежедневное промо: раз в день по Москве в случайный момент окна, человеку не больше одного."""
+        local = now.astimezone(_MSK)
+        day = local.date()
+        start_hour, end_hour = settings.DAILY_PROMO_WINDOW_MSK
+        window_start = datetime.combine(day, time(start_hour), tzinfo=_MSK)
+        offset = timedelta(hours=end_hour - start_hour) * min(max(self._rand(), 0.0), 0.999999)
+        row = await promo_repo.ensure_day(conn, day, (window_start + offset).astimezone(timezone.utc))
+        send_at = row["send_at"]
+        if now < send_at or local.hour >= settings.DAILY_PROMO_UNTIL_MSK:
+            return 0
+        total = 0
+        while True:
+            try:
+                async with conn.transaction():
+                    batch = await promo_repo.claim(
+                        conn, day, send_at, settings.DAILY_PROMO_PLATFORMS, limit=settings.BATCH_SIZE
+                    )
+                    if batch:
+                        await self._events.publish_notices(
+                            batch, settings.DAILY_PROMO_TEXT, screen=settings.DAILY_PROMO_SCREEN
+                        )
+                        await promo_repo.add_sent(conn, day, len(batch))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Ежедневная рассылка %s: пачка отменена, продолжу в следующий проход", day)
+                break
+            if not batch:
+                break
+            total += len(batch)
+            await self._sleep(settings.BATCH_PAUSE_SECONDS)
+        if total:
+            logger.info("Ежедневная рассылка %s: поставлено %s", day, total)
+        return total

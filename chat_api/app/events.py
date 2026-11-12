@@ -60,6 +60,7 @@ class EventBus:
         *,
         media_id: str | None = None,
         content_type: str | None = None,
+        screen: str | None = None,
     ) -> None:
         """Кладёт уведомление в поток рассылки платформы. Пустой список ничего не пишет."""
         if not recipients:
@@ -70,6 +71,7 @@ class EventBus:
             media_id=media_id,
             kind="photo" if media_id else None,
             content_type=content_type,
+            screen=screen,
         ).model_dump(exclude_none=True)
         sent = 0
         try:

@@ -75,6 +75,8 @@ services:
       CHANNEL_TOKEN_KEY: ${CHANNEL_TOKEN_KEY:-}
       ENGINE_FALLBACK_AFTER_SECONDS: ${ENGINE_FALLBACK_AFTER_SECONDS:-0}
       STATS_ONLINE_WINDOW_SECONDS: ${STATS_ONLINE_WINDOW_SECONDS:-300}
+      # Ежедневная массовая рассылка-промо (vk/tg, 19-21 МСК). Включена; false - выключить.
+      DAILY_PROMO_ENABLED: ${DAILY_PROMO_ENABLED:-true}
       # Медиа лежат в Supabase Storage (S3-протокол, бакет chat-media). Другое S3-хранилище можно задать MEDIA_S3_* в .env сервера.
       S3_ENDPOINT_URL: ${MEDIA_S3_ENDPOINT_URL:-http://storage:5000/s3}
       S3_REGION: ${MEDIA_S3_REGION:-local}

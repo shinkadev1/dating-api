@@ -58,7 +58,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         name="reminders",
     )
     broadcasts_task = asyncio.create_task(
-        BroadcastService(pool, EventBus(redis, settings.events_maxlen)).run(),
+        BroadcastService(
+            pool, EventBus(redis, settings.events_maxlen), daily_promo=settings.daily_promo_enabled
+        ).run(),
         name="broadcasts",
     )
     app.state.hub = hub

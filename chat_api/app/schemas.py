@@ -167,6 +167,7 @@ class ChatEvent(BaseModel):
     media_id: str | None = Field(None, description="Файл для `media`. Байты забирает бот собеседника")
     kind: MediaKind | None = Field(None, description="Вид файла для `media`")
     content_type: str | None = Field(None, description="MIME для `media`")
+    screen: str | None = Field(None, description="Для `notice`: экран бота вместо обычного текста (например, daily_promo)")
     locked: bool | None = Field(
         None,
         description="Для `media`: фото размыто, получатель без премиума. Оригинала и tg_file_id в событии нет",

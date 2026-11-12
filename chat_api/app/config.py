@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     # Кто писал за это время, считается онлайн в /stats.
     stats_online_window_seconds: float = Field(300, gt=0)
     events_maxlen: int = 10_000
+    # Ежедневная массовая рассылка-промо (vk/tg, случайное время 19-21 МСК). False - выключить.
+    daily_promo_enabled: bool = False
 
     # S3-совместимое хранилище медиа. Без любого из значений загрузка выключена.
     s3_endpoint_url: str | None = None
