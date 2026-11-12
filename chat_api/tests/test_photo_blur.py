@@ -179,14 +179,14 @@ class ForwardTests(unittest.TestCase):
     def test_no_bytes_is_skipped_without_event(self) -> None:
         partner = Peer("tg", "bot", 2)
         result, events, records = self.forward(partner, set(), locked_copy="none")
-        self.assertEqual(result, "skipped")
+        self.assertEqual(result, "locked")
         self.assertEqual(events.published, [])
         self.assertEqual(records[0]["status"], "skipped")
 
     def test_failed_copy_is_skipped_without_event(self) -> None:
         partner = Peer("vk", "club2", 2)
         result, events, records = self.forward(partner, set(), locked_copy="fail")
-        self.assertEqual(result, "skipped")
+        self.assertEqual(result, "locked")
         self.assertEqual(events.published, [])
         self.assertEqual(records[0]["status"], "skipped")
 

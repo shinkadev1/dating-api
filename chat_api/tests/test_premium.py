@@ -59,7 +59,9 @@ class TokenTests(unittest.TestCase):
 
 
 class FakeChat:
-    def __init__(self, phase: str = "chatting", blocked: str | None = None, until: datetime | None = None) -> None:
+    def __init__(self, phase: str = "chatting", blocked: str | None = None, until: datetime | None = None, result: str = "sent"
+    ) -> None:
+        self.result = result
         self.phase = phase
         self.blocked = blocked
         self.until = until
@@ -78,7 +80,7 @@ class FakeChat:
     async def forward_media(self, *args: object, **kwargs: object) -> str:
         self.forwarded.append(args)
         self.forward_kwargs.append(kwargs)
-        return "sent"
+        return self.result
 
 
 class FakeMedia:
@@ -174,6 +176,20 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(len(chat.forwarded), 1)
         locked_copy = chat.forward_kwargs[0]["locked_copy"]
         self.assertEqual(asyncio.run(locked_copy()), UUID(int=2))  # type: ignore[operator]
+
+    def test_file_id_photo_locked_for_partner_is_204_for_sender(self) -> None:
+        for result, code in (("locked", 204), ("sent", 204), ("skipped", 413), ("left", 409)):
+            chat = FakeChat(result=result)
+            response = make_client(chat, FakeMedia()).post(
+                "/api/v1/peers/tg/bot/77/media",
+                headers=AUTH,
+                data={"kind": "photo", "tg_file_id": "FILE", "tg_method": "photo"},
+            )
+            with self.subTest(result=result):
+                self.assertEqual(response.status_code, code)
+                self.assertEqual(len(chat.forwarded), 1)
+                if code == 204:
+                    self.assertEqual(response.content, b"")
 
     def test_media_not_chatting_is_still_409(self) -> None:
         response = make_client(FakeChat(phase="idle", blocked=MEDIA_NEEDS_PREMIUM), FakeMedia()).post(

@@ -355,7 +355,8 @@ class ChatService:
 
         `sent` — событие опубликовано. `left` — пары уже нет, диалог закрыт.
         `skipped` — файл не уйдёт: байтов нет, а file_id Telegram собеседнику на другой платформе
-        нечего отдать; либо фото живому собеседнику без премиума, а размытой копии нет.
+        нечего отдать. `locked` — фото живому собеседнику без премиума, а размытой копии нет:
+        не уйдёт (в историю пишется со статусом skipped), роутер отвечает отправителю как при успехе.
         Такому собеседнику вместо оригинала уходит размытая копия из `locked_copy` с `locked=true`,
         без tg_file_id; в историю пишется оригинал.
         """
@@ -396,7 +397,7 @@ class ChatService:
                 copy_id = await locked_copy() if locked_copy is not None else None
                 if copy_id is None:
                     await self._record(session.dialog_id, peer, partner, status="skipped", **fields)
-                    return "skipped"
+                    return "locked"
                 await self._events.publish(
                     partner,
                     ChatEvent(
