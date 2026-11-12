@@ -64,4 +64,4 @@ Untracked `.env.temp` и `rdap.json`. Их содержимое не анали�
 
 ## Промо каждого 10-го диалога (2026-11-12, не выкачено)
 
-В ветке `loop/promo-every-10`: `bot_users.dialogs_ended` (`007_dialogs_ended.sql`, без backfill), `_close_open_dialog` считает +1 каждой не-engine стороне при реальном закрытии диалога, событие `promo`, `ChatService.aclose()` в lifespan. Тесты: `tests/test_dialog_history.py` (PromoTests), `tests/test_dialogs_ended_db.py`. Проверки: pytest chat_api/tests на временном Postgres (pgserver, Python 3.13) — 113 passed, без skipped; compileall app — ok. Боты показ промо ещё не умеют (отдельные ветки).
+В ветке `loop/promo-every-10`: `bot_users.dialogs_ended` (`007_dialogs_ended.sql`, без backfill), `_close_open_dialog` считает +1 каждой не-engine стороне при реальном закрытии диалога, событие `promo`, `ChatService.aclose()` в lifespan. Тесты: `tests/test_dialog_history.py` (PromoTests), `tests/test_dialogs_ended_db.py`. Проверки: pytest chat_api/tests на временном Postgres (pgserver) — 113 passed, без skipped; compileall app — ok. Боты выкачены раньше API: dating-bot-tg f3b8a9f, dating-bot-vk 4d4fb7e.
