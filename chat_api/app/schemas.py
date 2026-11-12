@@ -56,6 +56,7 @@ class ChannelIn(BaseModel):
 class StopOut(BaseModel):
     phase: Phase = "idle"
     was_active: bool = Field(description="Был ли поиск или диалог до остановки")
+    promo: bool = Field(False, description="Показать инициатору «Диалог остановлен» с предложением премиума")
 
 
 class MessageIn(BaseModel):
@@ -84,9 +85,10 @@ class MediaOut(BaseModel):
 class ChatEvent(BaseModel):
     """Событие для второй стороны. Инициатор узнаёт итог из HTTP-ответа."""
 
-    type: Literal["partner_found", "message", "partner_left", "notice", "media", "promo"]
-    text: str | None = Field(None, description="Текст для `message` и `notice`. `promo` — предложение премиума после каждого 10-го диалога, без полей")
+    type: Literal["partner_found", "message", "partner_left", "notice", "media"]
+    text: str | None = Field(None, description="Текст для `message` и `notice`")
     reason: LeftReason | None = Field(None, description="Причина для `partner_left`")
+    promo: bool | None = Field(None, description="Для partner_left: показать экран конца диалога с предложением премиума (только vk/tg)")
     media_id: str | None = Field(None, description="Файл для `media`. Байты забирает бот собеседника")
     kind: MediaKind | None = Field(None, description="Вид файла для `media`")
     content_type: str | None = Field(None, description="MIME для `media`")

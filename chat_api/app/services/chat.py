@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -48,11 +46,15 @@ _STATS_TTL_SECONDS = 5.0
 MEDIA_NEEDS_PREMIUM = "Фото, видео и аудио можно отправлять только с премиумом"
 PARTNER_NEEDS_PREMIUM = "Собеседник без премиума не может получать медиа"
 
-# Каждый PROMO_EVERY-й завершённый диалог человека без премиума даёт ему событие promo.
-# Задержка нужна, чтобы промо пришло после partner_left и ответа на /stop.
+# Диалоги человека без премиума считаются завершёнными по счётчику: на 5-м, 15-м, 25-м... (n % 10 == 5)
+# партнёру в partner_left и инициатору в ответе /stop приходит флаг promo.
+PROMO_FIRST = 5
 PROMO_EVERY = 10
-PROMO_DELAY_SECONDS = 2.0
 _PROMO_PLATFORMS = ("vk", "tg")
+
+
+def _promo_due(count: int) -> bool:
+    return count % PROMO_EVERY == PROMO_FIRST
 
 
 class NotChattingError(Exception):
@@ -69,7 +71,6 @@ class ChatService:
         self._fallback_after = settings.engine_fallback_after_seconds
         self._online_window = settings.stats_online_window_seconds
         self._stats: tuple[float, StatsOut] | None = None
-        self._promo_tasks: set[asyncio.Task[None]] = set()
 
     @asynccontextmanager
     async def _locked(self) -> AsyncIterator[AsyncConnection]:
@@ -85,49 +86,34 @@ class ChatService:
         self,
         conn: AsyncConnection,
         ended: list[repo.DialogEnd],
-        *,
-        exclude: tuple[Peer, ...] = (),
-    ) -> list[Peer]:
-        """Кому показать промо: счётчик кратен PROMO_EVERY, vk/tg, без премиума. Вызывать до коммита."""
-        targets: list[Peer] = []
+        candidates: set[Peer],
+    ) -> set[Peer]:
+        """Кому показать промо: счётчик на пороге, vk/tg, без премиума. Вызывать до коммита."""
+        targets: set[Peer] = set()
         for item in ended:
             peer = item.peer
             if (
-                item.dialogs_ended % PROMO_EVERY != 0
-                or peer.platform not in _PROMO_PLATFORMS
-                or peer in exclude
-                or peer in targets
-                or await repo.user_is_premium(conn, peer)
+                peer in candidates
+                and peer not in targets
+                and _promo_due(item.dialogs_ended)
+                and peer.platform in _PROMO_PLATFORMS
+                and not await repo.user_is_premium(conn, peer)
             ):
-                continue
-            targets.append(peer)
+                targets.add(peer)
         return targets
 
-    def _schedule_promo(self, targets: list[Peer]) -> None:
+    @staticmethod
+    def _left_recipients(outbox: Outbox) -> set[Peer]:
+        return {r for r, ev in outbox if ev.type == "partner_left"}
+
+    @staticmethod
+    def _mark_promo(outbox: Outbox, targets: set[Peer]) -> None:
         if not targets:
             return
-        task = asyncio.create_task(self._send_promo(targets), name="promo")
-        self._promo_tasks.add(task)
-        task.add_done_callback(self._promo_tasks.discard)
-
-    async def _send_promo(self, targets: list[Peer]) -> None:
-        await asyncio.sleep(PROMO_DELAY_SECONDS)
-        for peer in targets:
-            try:
-                await self._events.publish(peer, ChatEvent(type="promo"))
-            except Exception as exc:
-                logger.warning(
-                    "Не отправил promo %s/%s/%s: %s", peer.platform, peer.bot_key, peer.user_id, type(exc).__name__
-                )
-
-    async def aclose(self) -> None:
-        """Останавливает отложенные промо при выключении сервиса."""
-        tasks = list(self._promo_tasks)
-        for task in tasks:
-            task.cancel()
-        for task in tasks:
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        outbox[:] = [
+            (r, ev.model_copy(update={"promo": True}) if ev.type == "partner_left" and r in targets else ev)
+            for r, ev in outbox
+        ]
 
     @staticmethod
     async def _linked_partner(conn: AsyncConnection, peer: Peer, session: repo.SessionRow | None) -> Peer | None:
@@ -197,7 +183,6 @@ class ChatService:
     async def _search(self, peer: Peer, left_reason: LeftReason) -> StateOut:
         outbox: Outbox = []
         ended: list[repo.DialogEnd] = []
-        exclude: tuple[Peer, ...] = ()
         async with self._locked() as conn:
             await self._detach(conn, peer, left_reason, outbox, ended)
             ended.extend(await repo.set_searching(conn, peer) or ())
@@ -212,8 +197,6 @@ class ChatService:
                     ended.extend(await repo.set_idle(conn, engine, reason="stopped", ended_by=None) or ())
                     outbox.append((engine, ChatEvent(type="partner_left", reason="stopped")))
                     stolen = True
-                    # «Украденный» у chat-engine не получал partner_left: промо ему не к месту.
-                    exclude = (other,)
             if other is not None:
                 dialog_id = await repo.open_dialog(conn, peer, other)
                 await repo.set_chatting(conn, peer, other, dialog_id)
@@ -221,9 +204,8 @@ class ChatService:
                 if not stolen:
                     outbox.append((other, ChatEvent(type="partner_found")))
                 phase = "chatting"
-            targets = await self._promo_targets(conn, ended, exclude=exclude)
+            self._mark_promo(outbox, await self._promo_targets(conn, ended, self._left_recipients(outbox)))
         await self._flush(outbox)
-        self._schedule_promo(targets)
         if phase == "searching" and self._engine_enabled:
             await self._events.request_engine()
         return StateOut(phase=phase)
@@ -311,10 +293,10 @@ class ChatService:
         ended: list[repo.DialogEnd] = []
         async with self._locked() as conn:
             was_active = await self._detach(conn, peer, "stopped", outbox, ended)
-            targets = await self._promo_targets(conn, ended)
+            targets = await self._promo_targets(conn, ended, self._left_recipients(outbox) | {peer})
+            self._mark_promo(outbox, targets)
         await self._flush(outbox)
-        self._schedule_promo(targets)
-        return StopOut(was_active=was_active)
+        return StopOut(was_active=was_active, promo=peer in targets)
 
     async def send_message(self, peer: Peer, text: str) -> MessageOut:
         """Пересылает реплику. Если пара уже распалась, закрывает диалог."""
@@ -331,9 +313,8 @@ class ChatService:
         ended: list[repo.DialogEnd] = []
         async with self._locked() as conn:
             await self._detach(conn, peer, "stopped", outbox, ended)
-            targets = await self._promo_targets(conn, ended)
+            self._mark_promo(outbox, await self._promo_targets(conn, ended, self._left_recipients(outbox)))
         await self._flush(outbox)
-        self._schedule_promo(targets)
         await self._record(session.dialog_id, peer, session.partner, kind="text", status="left", text=text)
         return MessageOut(delivered=False, phase="idle")
 
@@ -369,9 +350,8 @@ class ChatService:
             ended: list[repo.DialogEnd] = []
             async with self._locked() as conn:
                 await self._detach(conn, peer, "stopped", outbox, ended)
-                targets = await self._promo_targets(conn, ended)
+                self._mark_promo(outbox, await self._promo_targets(conn, ended, self._left_recipients(outbox)))
             await self._flush(outbox)
-            self._schedule_promo(targets)
             await self._record(session.dialog_id, peer, session.partner, status="left", **fields)
             return "left"
         if media_id is None and partner.platform != "tg":
@@ -411,10 +391,7 @@ class ChatService:
         ended: list[repo.DialogEnd] = []
         async with self._locked() as conn:
             await self._detach(conn, peer, "undeliverable", outbox, ended)
-            # Недоступному peer промо всё равно не доставить.
-            targets = await self._promo_targets(conn, ended, exclude=(peer,))
         await self._flush(outbox)
-        self._schedule_promo(targets)
 
     async def engine_demand(self) -> EngineDemandOut:
         async with self._pool.connection() as conn:
@@ -428,9 +405,8 @@ class ChatService:
         async with self._locked() as conn:
             await self._detach(conn, engine, "stopped", outbox, ended)
             ended.extend(await repo.set_searching(conn, engine) or ())
-            targets = await self._promo_targets(conn, ended)
+            self._mark_promo(outbox, await self._promo_targets(conn, ended, self._left_recipients(outbox)))
         await self._flush(outbox)
-        self._schedule_promo(targets)
         return StateOut(phase="searching")
 
     async def engine_attach(self, engine: Peer) -> EngineAttachOut:

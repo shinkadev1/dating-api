@@ -62,6 +62,6 @@ Untracked `.env.temp` и `rdap.json`. Их содержимое не анали�
 
 В ветке `loop/engine-limit-failover`: состояние `limited` обрабатывается в `bridge.py`, cooldown 60 с после 409 на start, `EngineAccount.limited_until`. Тесты `engine_bridge/tests/test_bridge_limited.py` (pytest, 7 passed локально). Не проверено против живого chat-engine; нужен релиз chat-engine с `limited`.
 
-## Промо каждого 10-го диалога (2026-11-12, не выкачено)
+## Промо на 5-м, 15-м, 25-м… диалоге (2026-11-12, не выкачено)
 
-В ветке `loop/promo-every-10`: `bot_users.dialogs_ended` (`007_dialogs_ended.sql`, без backfill), `_close_open_dialog` считает +1 каждой не-engine стороне при реальном закрытии диалога, событие `promo`, `ChatService.aclose()` в lifespan. Тесты: `tests/test_dialog_history.py` (PromoTests), `tests/test_dialogs_ended_db.py`. Проверки: pytest chat_api/tests на временном Postgres (pgserver) — 113 passed, без skipped; compileall app — ok. Боты выкачены раньше API: dating-bot-tg f3b8a9f, dating-bot-vk 4d4fb7e.
+В ветке `loop/promo-every-10`: `bot_users.dialogs_ended` (`007_dialogs_ended.sql`, без backfill), `_close_open_dialog` считает +1 каждой не-engine стороне при реальном закрытии диалога; порог `n % 10 == 5`; флаг `promo` в `ChatEvent` (`partner_left`) и `StopOut.promo`; события `promo`, задержки и `ChatService.aclose()` нет. Тесты: `tests/test_dialog_history.py` (PromoTests), `tests/test_dialogs_ended_db.py`. Проверки: pytest chat_api/tests без БД — 76 passed, 38 skipped; на временном Postgres (pgserver) — 114 passed, 0 skipped; compileall app — ok. Клиенты ботов под новый контракт ещё не доработаны/не выкачены.
