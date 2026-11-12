@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from uuid import UUID
@@ -267,13 +267,14 @@ class ChatService:
         async with self._pool.connection() as conn:
             return await repo.user_premium_until(conn, peer)
 
-    async def media_block_reason(self, peer: Peer) -> str | None:
-        """Почему медиа не уйдёт: нужен премиум у отправителя и у живого собеседника.
+    async def media_block_reason(self, peer: Peer, kind: str) -> str | None:
+        """Почему медиа не уйдёт. Фото идут всем: получатель без премиума увидит размытую копию.
 
+        Видео, кружок и голос требуют премиума у отправителя и у живого собеседника.
         Собеседник из chat-engine премиума не требует, а сам chat-engine (engine_bridge) шлёт медиа
         без проверки. Если пары уже нет, решает forward_media.
         """
-        if peer.is_engine:
+        if peer.is_engine or kind == "photo":
             return None
         async with self._pool.connection() as conn:
             if not await repo.user_is_premium(conn, peer):
@@ -348,11 +349,15 @@ class ChatService:
         *,
         tg_file_id: str | None = None,
         tg_method: TgSend | None = None,
+        locked_copy: Callable[[], Awaitable[UUID | None]] | None = None,
     ) -> str:
         """Ставит файл в очередь собеседника.
 
         `sent` — событие опубликовано. `left` — пары уже нет, диалог закрыт.
-        `skipped` — байтов нет, а file_id Telegram собеседнику на другой платформе нечего отдать.
+        `skipped` — файл не уйдёт: байтов нет, а file_id Telegram собеседнику на другой платформе
+        нечего отдать; либо фото живому собеседнику без премиума, а размытой копии нет.
+        Такому собеседнику вместо оригинала уходит размытая копия из `locked_copy` с `locked=true`,
+        без tg_file_id; в историю пишется оригинал.
         """
         fields = {
             "kind": "audio" if tg_method == "audio" else kind,
@@ -384,6 +389,29 @@ class ChatService:
             )
             await self._record(session.dialog_id, peer, partner, status="skipped", **fields)
             return "skipped"
+        if kind == "photo" and not partner.is_engine:
+            async with self._pool.connection() as conn:
+                partner_premium = await repo.user_is_premium(conn, partner)
+            if not partner_premium:
+                copy_id = await locked_copy() if locked_copy is not None else None
+                if copy_id is None:
+                    await self._record(session.dialog_id, peer, partner, status="skipped", **fields)
+                    return "skipped"
+                await self._events.publish(
+                    partner,
+                    ChatEvent(
+                        type="media",
+                        media_id=str(copy_id),
+                        kind="photo",
+                        content_type="image/jpeg",
+                        locked=True,
+                    ),
+                )
+                logger.info(
+                    "Размытое фото %s -> %s/%s/%s", copy_id, partner.platform, partner.bot_key, partner.user_id
+                )
+                await self._record(session.dialog_id, peer, partner, status="delivered", **fields)
+                return "sent"
         await self._events.publish(
             partner,
             ChatEvent(

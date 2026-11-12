@@ -137,7 +137,7 @@ async def send_message(body: MessageIn, peer: ServicePeer, chat: Chat) -> Messag
     responses={
         status.HTTP_204_NO_CONTENT: {"description": "Байтов нет, собеседнику в Telegram ушёл file_id"},
         status.HTTP_403_FORBIDDEN: {
-            "description": "Нет премиума у отправителя или у живого собеседника; detail содержит «премиум»"
+            "description": "Видео, кружок или голос без премиума у отправителя или у живого собеседника; detail содержит «премиум»"
         },
         status.HTTP_409_CONFLICT: {"description": _NOT_CHATTING},
         status.HTTP_413_REQUEST_ENTITY_TOO_LARGE: {"description": "Файл больше предела для этого вида"},
@@ -164,8 +164,11 @@ async def store_media(
 ) -> MediaOut:
     """Кладёт файл в S3 и ставит событие `media` собеседнику.
 
-    Фото, аудио, голос, видео и кружок уходят, только если премиум есть и у отправителя,
-    и у собеседника. Иначе файл не читается и не сохраняется, ответ 403 с «премиум» в detail:
+    Фото уходят без премиума. Живой собеседник без премиума получает серверную размытую копию
+    (событие `media` с `locked=true`), оригинал и tg_file_id ему не передаются; если копии нет
+    (фото только по file_id или копия не вышла), собеседник фото не получит.
+    Видео, кружок и голос уходят, только если премиум есть и у отправителя, и у собеседника.
+    Иначе файл не читается и не сохраняется, ответ 403 с «премиум» в detail:
     «Фото, видео и аудио можно отправлять только с премиумом» — нет премиума у отправителя,
     «Собеседник без премиума не может получать медиа» — у живого собеседника.
     Собеседнику из chat-engine премиум не нужен.
@@ -176,7 +179,7 @@ async def store_media(
     """
     if (await chat.state(peer)).phase != "chatting":
         raise HTTPException(status.HTTP_409_CONFLICT, _NOT_CHATTING)
-    blocked = await chat.media_block_reason(peer)
+    blocked = await chat.media_block_reason(peer, kind)
     if blocked is not None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, blocked)
     file_id, method = _telegram_ref(peer.platform, kind, tg_file_id, tg_method)
@@ -197,6 +200,7 @@ async def store_media(
             saved.content_type,
             tg_file_id=file_id,
             tg_method=method,
+            locked_copy=lambda: media.save_locked_copy(peer, raw),
         )
         return saved
     if file_id is None or method is None:

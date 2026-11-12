@@ -1,5 +1,9 @@
 # Текущая задача
 
+## Размытое фото для получателя без премиума — 2026-11-12
+
+Задача LoopOS 2026-11-12-photo-blur, ветка `loop/photo-blur` (worktree `.worktrees/vk-bot-photo-blur`). Одобрено пользователем. Реализовано в chat_api, проверки в STATE.md, не выкачено. Дальше: ревью, клиенты ботов/Worker для `media.locked`, деплой.
+
 ## «Пошлый чат» — премиум-режим 18+ — 2026-11-12
 
 Задача LoopOS 2026-11-12-adult-chat, ветка `feat/adult-chat` от origin/master 7dc9e4a (worktree `.worktrees/vk-bot-adult-chat`). Одобрено пользователем. Статус: реализовано, локальный коммит, ждёт ревью; push/merge/деплой не выполнялись. Контракт (его реализуют параллельно chat-engine и боты): `GET /accounts` chat-engine отдаёт `mode` normal|adult; `POST .../search` принимает необязательное тело `{"mode"}`; adult без премиума — 403. Проверки — в [STATE.md](STATE.md). Выкладывать вместе: migration `008_adult_mode.sql` применяется при старте chat-api, engine_bridge без обновления chat-engine остаётся в normal.

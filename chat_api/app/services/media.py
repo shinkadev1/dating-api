@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from uuid import UUID, uuid4
 
 from psycopg_pool import AsyncConnectionPool
 
+from app.media_blur import blur_photo
 from app.media_types import KINDS, MAX_BYTES, MediaRejected, detect_content_type, object_key
 from app.peer import Peer
 from app.repositories.media import get_media, insert_media
@@ -39,6 +41,19 @@ class MediaService:
         if content_type is None:
             raise MediaRejected(415, "Файл не похож на фото, видео, кружок или голосовое")
 
+        return await self._store(peer, kind, content_type, body)
+
+    async def save_locked_copy(self, peer: Peer, body: bytes) -> UUID | None:
+        """Сохраняет размытую копию фото для получателя без премиума. None, если не вышло."""
+        try:
+            blurred = await asyncio.to_thread(blur_photo, body)
+            saved = await self._store(peer, "photo", "image/jpeg", blurred)
+        except Exception as exc:
+            logger.warning("Не сделал размытую копию фото: %s", type(exc).__name__)
+            return None
+        return saved.id
+
+    async def _store(self, peer: Peer, kind: str, content_type: str, body: bytes) -> MediaOut:
         media_id = uuid4()
         key = object_key(peer, media_id, content_type)
         await self._storage.put(key, body, content_type)

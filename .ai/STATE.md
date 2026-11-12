@@ -1,5 +1,9 @@
 # Состояние vk-bot
 
+## Ветка loop/photo-blur, 2026-11-12
+
+От origin/master f3b8357. Фото без гейта отправителя, размытая копия для получателя без премиума: `app/media_blur.py`, `MediaService.save_locked_copy/_store`, `ChatService.media_block_reason(peer, kind)` и `forward_media(..., locked_copy=...)`, `ChatEvent.locked`, `Pillow>=11.0` в requirements. Тесты: `tests/test_photo_blur.py` (новый), правки `test_premium.py` и одной строки `test_dialog_history.py` (премиум получателю в тесте фото по file_id). Проверки: compileall app — ok; `pytest tests -q` в `chat_api` (Python 3.13) без БД — 93 passed, 49 skipped; с Postgres (pgserver из venv 3.10 + tz-файлы из tzdata, TEST_DATABASE_URL) — 142 passed, 0 skipped. Не проверялось: живые боты, S3, реальные фото с телефона, деплой (не выкачено). Клиенты ботов и Worker сайта под `locked` ещё не доработаны.
+
 ## Ветка feat/adult-chat, 2026-11-12
 
 От origin/master 7dc9e4a. «Пошлый чат»: `008_adult_mode.sql` (`chat_sessions.mode` normal|adult, DEFAULT normal, CHECK-констрейнт, идемпотентно), режим в `set_searching` и во всех выборках очереди (`find_searcher`, `find_human_with_engine`, `oldest_waiting_human`, `engine_demand` по режимам), `SearchIn` в `search` и `engine/{account}/hunt`, `EngineDemandOut.modes`, 403 для adult без премиума, engine_bridge считает спрос по режимам (`AccountLink.mode` из `/accounts`). Тесты: `chat_api/tests/test_adult_mode.py` (новый), правки `test_dialog_history.py` (сигнатуры подмены) и `engine_bridge/tests/test_bridge_limited.py`. Проверки (Python 3.13, Postgres через pgserver на 3.10 с добавленными tz-файлами): `pytest tests -q -rs` в `chat_api` — 129 passed, 0 skipped (было 113-114); `pytest tests` в `engine_bridge` — 13 passed; compileall — ok. Не проверялось: живые chat-engine/боты, деплой, миграция на боевой базе.

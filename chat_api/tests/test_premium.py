@@ -10,6 +10,7 @@ import unittest
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from uuid import UUID
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -21,7 +22,7 @@ from app.config import Settings, get_settings
 from app.deps import get_chat, get_media
 from app.peer import Peer
 from app.routers import peers
-from app.schemas import StateOut
+from app.schemas import MediaOut, StateOut
 from app.services import chat as chat_module
 from app.services.chat import MEDIA_NEEDS_PREMIUM, PARTNER_NEEDS_PREMIUM, ChatService
 
@@ -63,11 +64,12 @@ class FakeChat:
         self.blocked = blocked
         self.until = until
         self.forwarded: list[object] = []
+        self.forward_kwargs: list[dict[str, object]] = []
 
     async def state(self, peer: Peer) -> StateOut:
         return StateOut(phase=self.phase)  # type: ignore[arg-type]
 
-    async def media_block_reason(self, peer: Peer) -> str | None:
+    async def media_block_reason(self, peer: Peer, kind: str) -> str | None:
         return self.blocked
 
     async def premium_until(self, peer: Peer) -> datetime | None:
@@ -75,6 +77,7 @@ class FakeChat:
 
     async def forward_media(self, *args: object, **kwargs: object) -> str:
         self.forwarded.append(args)
+        self.forward_kwargs.append(kwargs)
         return "sent"
 
 
@@ -85,6 +88,15 @@ class FakeMedia:
     async def save(self, *args: object) -> object:
         self.saved += 1
         raise AssertionError("медиа без премиума не должно сохраняться")
+
+
+class SavingMedia(FakeMedia):
+    async def save(self, peer: Peer, kind: str, body: bytes) -> object:
+        self.saved += 1
+        return MediaOut(id=UUID(int=1), kind=kind, key="k", content_type="image/jpeg", size=len(body))
+
+    async def save_locked_copy(self, peer: Peer, body: bytes) -> UUID:
+        return UUID(int=2)
 
 
 def make_client(chat: FakeChat, media: FakeMedia, secret: str | None = SECRET) -> TestClient:
@@ -149,6 +161,20 @@ class RouteTests(unittest.TestCase):
                 self.assertEqual(media.saved, 0)
                 self.assertEqual(chat.forwarded, [])
 
+    def test_photo_from_sender_without_premium_passes_with_locked_copy(self) -> None:
+        chat, media = FakeChat(), SavingMedia()
+        response = make_client(chat, media).post(
+            "/api/v1/peers/vk/club1/77/media",
+            headers=AUTH,
+            data={"kind": "photo"},
+            files={"file": ("a.jpg", b"\xff\xd8\xff" + b"0" * 64, "image/jpeg")},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], str(UUID(int=1)))
+        self.assertEqual(len(chat.forwarded), 1)
+        locked_copy = chat.forward_kwargs[0]["locked_copy"]
+        self.assertEqual(asyncio.run(locked_copy()), UUID(int=2))  # type: ignore[operator]
+
     def test_media_not_chatting_is_still_409(self) -> None:
         response = make_client(FakeChat(phase="idle", blocked=MEDIA_NEEDS_PREMIUM), FakeMedia()).post(
             "/api/v1/peers/vk/club1/77/media", headers=AUTH, data={"kind": "photo"}
@@ -165,7 +191,7 @@ class FakePool:
 class GateTests(unittest.TestCase):
     me = Peer("vk", "club1", 1)
 
-    def reason(self, premium: set[Peer], partner: Peer | None) -> str | None:
+    def reason(self, premium: set[Peer], partner: Peer | None, kind: str = "video") -> str | None:
         service = ChatService.__new__(ChatService)
         service._pool = FakePool()  # type: ignore[attr-defined]
 
@@ -183,7 +209,7 @@ class GateTests(unittest.TestCase):
             patch.object(chat_module.repo, "get_session", get_session),
             patch.object(ChatService, "_linked_partner", staticmethod(linked)),
         ):
-            return asyncio.run(service.media_block_reason(self.me))
+            return asyncio.run(service.media_block_reason(self.me, kind))
 
     def test_both_premium_required_engine_exempt(self) -> None:
         human = Peer("tg", "bot", 2)
@@ -193,6 +219,16 @@ class GateTests(unittest.TestCase):
         self.assertIsNone(self.reason({self.me, human}, human))
         self.assertIsNone(self.reason({self.me}, engine))
         self.assertIsNone(self.reason({self.me}, None))
+
+    def test_photo_is_not_gated(self) -> None:
+        human = Peer("tg", "bot", 2)
+        for premium in (set(), {self.me}, {human}):
+            with self.subTest(premium=len(premium)):
+                self.assertIsNone(self.reason(premium, human, "photo"))
+        for kind in ("video", "video_note", "voice"):
+            with self.subTest(kind=kind):
+                self.assertEqual(self.reason(set(), human, kind), MEDIA_NEEDS_PREMIUM)
+                self.assertEqual(self.reason({self.me}, human, kind), PARTNER_NEEDS_PREMIUM)
 
     def test_engine_sender_is_not_gated(self) -> None:
         self.me = Peer("engine", "acc", 1)

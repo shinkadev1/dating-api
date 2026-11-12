@@ -425,6 +425,7 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_media_without_dialog_id_writes_nothing(self) -> None:
         repo = Repo({A: chatting(B, None), B: chatting(A, None)})
+        repo.premium = {B}
         rec = Recorder()
         result = await self.media(repo, rec, tg_file_id="FILE", tg_method="photo")
         self.assertEqual(result, "sent")
