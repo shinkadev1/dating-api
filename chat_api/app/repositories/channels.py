@@ -1,4 +1,4 @@
-"""SQL сообществ ВК, управляемых из CRM: ключи (зашифрованные), переключатель и статус."""
+"""SQL сообществ ВК, управляемых из CRM: ключи (открытым текстом), переключатель и статус."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from psycopg import AsyncConnection
 _VK = "platform = 'vk' AND external_id ~ '^[0-9]+$'"
 
 _COLUMNS = """
-    external_id::bigint AS group_id, title, photo_url, token_hint, (token_encrypted IS NOT NULL) AS has_token,
+    external_id::bigint AS group_id, title, photo_url, token_hint, (token IS NOT NULL) AS has_token,
     enabled, status, status_error, last_seen_at
 """
 
@@ -28,17 +28,18 @@ async def get_vk(conn: AsyncConnection, group_id: int) -> dict[str, Any] | None:
 
 
 async def connect_vk(
-    conn: AsyncConnection, group_id: int, *, title: str, photo_url: str, token_encrypted: str, token_hint: str
+    conn: AsyncConnection, group_id: int, *, title: str, photo_url: str, token: str, token_hint: str
 ) -> dict[str, Any]:
     """Создаёт сообщество или обновляет существующее: новый ключ, включено, статус неизвестен."""
     cursor = await conn.execute(
         f"""
-        INSERT INTO channels (platform, external_id, title, photo_url, token_encrypted, token_hint, token_updated_at)
-        VALUES ('vk', %(id)s, %(title)s, %(photo)s, %(token)s, %(hint)s, NOW())
+        INSERT INTO channels (platform, external_id, title, photo_url, token, token_encrypted, token_hint, token_updated_at)
+        VALUES ('vk', %(id)s, %(title)s, %(photo)s, %(token)s, NULL, %(hint)s, NOW())
         ON CONFLICT (platform, external_id) DO UPDATE SET
             title = CASE WHEN EXCLUDED.title <> '' THEN EXCLUDED.title ELSE channels.title END,
             photo_url = EXCLUDED.photo_url,
-            token_encrypted = EXCLUDED.token_encrypted,
+            token = EXCLUDED.token,
+            token_encrypted = NULL,
             token_hint = EXCLUDED.token_hint,
             token_updated_at = NOW(),
             enabled = TRUE,
@@ -46,20 +47,21 @@ async def connect_vk(
             status_error = ''
         RETURNING {_COLUMNS}
         """,
-        {"id": str(group_id), "title": title, "photo": photo_url, "token": token_encrypted, "hint": token_hint},
+        {"id": str(group_id), "title": title, "photo": photo_url, "token": token, "hint": token_hint},
     )
     return await cursor.fetchone()
 
 
 async def replace_token(
-    conn: AsyncConnection, group_id: int, *, title: str, photo_url: str, token_encrypted: str, token_hint: str
+    conn: AsyncConnection, group_id: int, *, title: str, photo_url: str, token: str, token_hint: str
 ) -> dict[str, Any] | None:
     cursor = await conn.execute(
         f"""
         UPDATE channels SET
             title = CASE WHEN %(title)s <> '' THEN %(title)s ELSE title END,
             photo_url = %(photo)s,
-            token_encrypted = %(token)s,
+            token = %(token)s,
+            token_encrypted = NULL,
             token_hint = %(hint)s,
             token_updated_at = NOW(),
             status = 'unknown',
@@ -67,7 +69,7 @@ async def replace_token(
         WHERE {_VK} AND external_id = %(id)s
         RETURNING {_COLUMNS}
         """,
-        {"id": str(group_id), "title": title, "photo": photo_url, "token": token_encrypted, "hint": token_hint},
+        {"id": str(group_id), "title": title, "photo": photo_url, "token": token, "hint": token_hint},
     )
     return await cursor.fetchone()
 
@@ -81,11 +83,11 @@ async def set_enabled(conn: AsyncConnection, group_id: int, enabled: bool) -> di
 
 
 async def enabled_tokens(conn: AsyncConnection) -> list[dict[str, Any]]:
-    """Включённые сообщества с ключом: group_id, title, token_encrypted."""
+    """Включённые сообщества с ключом: group_id, title, token."""
     cursor = await conn.execute(
         f"""
-        SELECT external_id::bigint AS group_id, title, token_encrypted FROM channels
-        WHERE {_VK} AND enabled AND token_encrypted IS NOT NULL
+        SELECT external_id::bigint AS group_id, title, token FROM channels
+        WHERE {_VK} AND enabled AND token IS NOT NULL
         ORDER BY external_id::bigint
         """
     )
@@ -100,7 +102,7 @@ async def disabled_ids(conn: AsyncConnection) -> list[int]:
 
 
 async def import_token(
-    conn: AsyncConnection, group_id: int, *, title: str, token_encrypted: str, token_hint: str
+    conn: AsyncConnection, group_id: int, *, title: str, token: str, token_hint: str
 ) -> bool:
     """Сохраняет ключ из окружения бота, только если сообщества нет или у него нет ключа.
 
@@ -108,17 +110,18 @@ async def import_token(
     """
     cursor = await conn.execute(
         """
-        INSERT INTO channels (platform, external_id, title, token_encrypted, token_hint, token_updated_at)
+        INSERT INTO channels (platform, external_id, title, token, token_hint, token_updated_at)
         VALUES ('vk', %(id)s, %(title)s, %(token)s, %(hint)s, NOW())
         ON CONFLICT (platform, external_id) DO UPDATE SET
             title = CASE WHEN channels.title = '' THEN EXCLUDED.title ELSE channels.title END,
-            token_encrypted = EXCLUDED.token_encrypted,
+            token = EXCLUDED.token,
+            token_encrypted = NULL,
             token_hint = EXCLUDED.token_hint,
             token_updated_at = NOW()
-        WHERE channels.token_encrypted IS NULL
+        WHERE channels.token IS NULL
         RETURNING id
         """,
-        {"id": str(group_id), "title": title, "token": token_encrypted, "hint": token_hint},
+        {"id": str(group_id), "title": title, "token": token, "hint": token_hint},
     )
     return await cursor.fetchone() is not None
 
@@ -133,3 +136,28 @@ async def report_status(conn: AsyncConnection, items: list[tuple[int, str, str]]
             """,
             (status, error[:500], str(group_id)),
         )
+
+
+async def encrypted_rows(conn: AsyncConnection) -> list[dict[str, Any]]:
+    """Старые записи с зашифрованным ключом, который ещё не перенесён в token."""
+    cursor = await conn.execute(
+        f"""
+        SELECT external_id::bigint AS group_id, token_encrypted FROM channels
+        WHERE {_VK} AND token IS NULL AND token_encrypted LIKE 'v1:%'
+        ORDER BY external_id::bigint
+        """
+    )
+    return list(await cursor.fetchall())
+
+
+async def set_plain(conn: AsyncConnection, group_id: int, token: str, old_encrypted: str) -> bool:
+    """Переносит ключ в token и обнуляет token_encrypted. Не затирает запись, изменённую за это время."""
+    cursor = await conn.execute(
+        f"""
+        UPDATE channels SET token = %s, token_encrypted = NULL
+        WHERE {_VK} AND external_id = %s AND token IS NULL AND token_encrypted = %s
+        RETURNING id
+        """,
+        (token, str(group_id), old_encrypted),
+    )
+    return await cursor.fetchone() is not None

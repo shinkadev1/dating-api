@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from redis.asyncio import Redis
 
+from app.channel_tokens import migrate_encrypted
 from app.config import get_settings
 from app.db import create_pool, ensure_schema
 from app.events import REDIS_SOCKET_TIMEOUT, EventBus, WebSocketHub
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     pool = create_pool(settings.database_url)
     await pool.open(wait=True, timeout=60)
     await ensure_schema(pool)
+    await migrate_encrypted(pool, settings.channel_token_key)
     redis = Redis.from_url(
         settings.redis_url,
         decode_responses=True,

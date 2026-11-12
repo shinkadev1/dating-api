@@ -78,10 +78,15 @@ Bot CRM (вкладка «Рассылки») управляет рассылк�
 ## Сообщества ВК из CRM
 
 Bot CRM (вкладка «Сообщества») подключает сообщества ВК без правки секретов. Ключ сообщества хранится в
-`channels.token_encrypted` в виде `v1:` + base64(nonce + AES-256-GCM), ключ шифрования — SHA-256 от
-`CHANNEL_TOKEN_KEY` (на сервере его создаёт `deploy/update.sh`; не менять: старые ключи не расшифруются).
-AAD = `vk:<group_id>`. Без `CHANNEL_TOKEN_KEY` маршруты записи и выдачи ключей отвечают 503. Полный ключ
-получает только бот (`GET /channels/vk/tokens`), CRM видит `token_hint` («vk1.a.…Qx7f»); в логи ключ не пишется.
+`channels.token` открытым текстом, без шифрования. Полный ключ получает только бот (`GET /channels/vk/tokens`),
+CRM видит `token_hint` («vk1.a.…Qx7f»); в логи ключ не пишется.
+
+Перенос старых записей: раньше ключи лежали в `channels.token_encrypted` (`v1:` + base64(nonce + AES-256-GCM),
+AAD = `vk:<group_id>`). При старте Chat API после проверки схемы строки с `token IS NULL` и `v1:`-значением
+расшифровываются `CHANNEL_TOKEN_KEY`, пишутся в `token`, `token_encrypted` обнуляется (лог «Перенесено токенов
+сообществ ВК: N», без значений). Без ключа или при ошибке расшифровки строка остаётся как есть (в логе только
+`group_id`), она считается без ключа, и бот может заполнить её через `/channels/vk/import`. `CHANNEL_TOKEN_KEY`
+нужен только для этого переноса; новым установкам не нужен, `deploy/update.sh` его больше не создаёт и не удаляет.
 
 | Метод | Путь | Кто | Что делает |
 |---|---|---|---|
@@ -94,7 +99,7 @@ AAD = `vk:<group_id>`. Без `CHANNEL_TOKEN_KEY` маршруты записи 
 | POST | `/channels/vk/import` `{group_id, title, token}` | bot | переносит ключ из окружения бота; существующий ключ и `enabled` не трогает; `{stored}` |
 | POST | `/channels/vk/status` `{items: [{group_id, status, error}]}` | bot | статус работы бота (≤200), обновляет `last_seen_at` (204) |
 
-Колонки добавляет `supabase/init/009_channel_tokens.sql` (только `ADD COLUMN IF NOT EXISTS`; старые строки
+Колонки добавляют `supabase/init/009_channel_tokens.sql` и `010_channel_token_plain.sql` (колонка `token`; только `ADD COLUMN IF NOT EXISTS`; старые строки
 `enabled = TRUE`, `status = 'unknown'`). `POST /channels` бота работает как раньше.
 
 ## Аналитика и люди для CRM

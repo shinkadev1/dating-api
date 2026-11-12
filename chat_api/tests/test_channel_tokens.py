@@ -1,12 +1,15 @@
-"""Шифрование ключей сообществ ВК и проверка ключа через ВК (подмена httpx)."""
+"""Расшифровка старых ключей сообществ ВК, подсказка и проверка ключа через ВК (подмена httpx)."""
 
 import asyncio
 import base64
+import hashlib
+import os
 import sys
 import unittest
 from unittest import mock
 
 import httpx
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from app import channel_tokens, vk_groups
 from app.config import Settings
@@ -18,18 +21,21 @@ SECRET = "k" * 40
 TOKEN = "vk1.a.abcdefghijklmnopqrstuvwxyz0123456789Qx7f"
 
 
-class EncryptTest(unittest.TestCase):
-    def test_roundtrip_and_format(self):
-        sealed = channel_tokens.encrypt(SECRET, 123, TOKEN)
-        self.assertTrue(sealed.startswith("v1:"))
+def seal(secret: str, group_id: int, token: str) -> str:
+    """Как записывала старая версия: v1: + base64(nonce + AES-256-GCM), AAD vk:<group_id>."""
+    nonce = os.urandom(12)
+    key = hashlib.sha256(secret.encode()).digest()
+    return "v1:" + base64.b64encode(nonce + AESGCM(key).encrypt(nonce, token.encode(), f"vk:{group_id}".encode())).decode()
+
+
+class DecryptTest(unittest.TestCase):
+    def test_decrypts_old_format(self):
+        sealed = seal(SECRET, 123, TOKEN)
         self.assertNotIn(TOKEN, sealed)
         self.assertEqual(channel_tokens.decrypt(SECRET, 123, sealed), TOKEN)
 
-    def test_nonce_is_random(self):
-        self.assertNotEqual(channel_tokens.encrypt(SECRET, 1, TOKEN), channel_tokens.encrypt(SECRET, 1, TOKEN))
-
     def test_other_group_other_key_or_garbage_fails(self):
-        sealed = channel_tokens.encrypt(SECRET, 123, TOKEN)
+        sealed = seal(SECRET, 123, TOKEN)
         broken = "v1:" + base64.b64encode(b"x" * 40).decode()
         for secret, group, value in (
             (SECRET, 124, sealed),

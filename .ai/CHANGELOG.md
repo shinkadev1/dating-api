@@ -2,7 +2,7 @@
 
 ## 2026-11-12 — сообщества ВК подключаются из CRM (ветка `loop/vk-communities-crm`, не выкачено)
 
-Новые маршруты `/api/v1/channels/vk*` (check, connect, replace token, enable/disable для `crm`; tokens, import, status для `bot`). Ключи сообществ лежат в `channels.token_encrypted` (AES-256-GCM, секрет `CHANNEL_TOKEN_KEY`, который создаёт `deploy/update.sh`). Отключённое сообщество исключено из `/notifications` и рассылок. Миграция `009` только добавляет колонки; старый контракт `POST /channels` не менялся, поэтому выпуск vk-bot совместим со старым ботом.
+Новые маршруты `/api/v1/channels/vk*` (check, connect, replace token, enable/disable для `crm`; tokens, import, status для `bot`). Ключи сообществ хранятся открытым текстом в `channels.token` (миграция `010`); старые `token_encrypted` (AES-256-GCM) переносятся при старте Chat API, пока задан `CHANNEL_TOKEN_KEY`; `deploy/update.sh` ключ больше не создаёт, но и не удаляет. Отключённое сообщество исключено из `/notifications` и рассылок. Миграция `009` только добавляет колонки; старый контракт `POST /channels` не менялся, поэтому выпуск vk-bot совместим со старым ботом.
 
 ## 2026-11-12 — фото без премиума: размытая копия получателю (ветка `loop/photo-blur`, не выкачено)
 

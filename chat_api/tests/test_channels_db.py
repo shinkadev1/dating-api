@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from app import vk_groups
+from app import channel_tokens, vk_groups
 from app.broadcasts.service import BroadcastService
 from app.config import Settings, get_settings
 from app.db import ensure_schema
@@ -22,6 +22,7 @@ from app.repositories import sessions
 from app.routers import channels as channels_router
 
 sys.path.insert(0, os.path.dirname(__file__))
+from test_channel_tokens import seal  # noqa: E402
 from test_reminders_db import _database_url  # noqa: E402
 
 if sys.platform == "win32":
@@ -65,7 +66,7 @@ class ChannelsDbTest(unittest.IsolatedAsyncioTestCase):
         await self.pool.open(wait=True, timeout=60)
         self.addAsyncCleanup(self.pool.close)
         await ensure_schema(self.pool)
-        await ensure_schema(self.pool)  # 009 идемпотентна
+        await ensure_schema(self.pool)  # 009 и 010 идемпотентны
         async with self.pool.connection() as conn:
             await conn.execute(
                 "TRUNCATE broadcast_log, broadcasts, reminder_log, user_channels, chat_sessions, bot_users, "
@@ -89,13 +90,12 @@ class ChannelsDbTest(unittest.IsolatedAsyncioTestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-        self.key = KEY
         app = FastAPI()
         app.state.pool = self.pool
         app.include_router(channels_router.router, prefix="/api/v1")
         self.client_kind = "crm"
         app.dependency_overrides[current_client] = lambda: self.client_kind
-        app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None, **BASE, channel_token_key=self.key)
+        app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None, **BASE)
         self.api = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
         self.addAsyncCleanup(self.api.aclose)
 
@@ -155,7 +155,7 @@ class ChannelsDbTest(unittest.IsolatedAsyncioTestCase):
         app = FastAPI()
         app.state.pool = self.pool
         app.include_router(channels_router.router, prefix="/api/v1")
-        app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None, **BASE, channel_token_key=KEY)
+        app.dependency_overrides[get_settings] = lambda: Settings(_env_file=None, **BASE)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as api:
             for path in ("/channels/vk", "/channels/vk/tokens"):
                 self.assertEqual((await api.get("/api/v1" + path)).status_code, 401)
@@ -204,7 +204,7 @@ class ChannelsDbTest(unittest.IsolatedAsyncioTestCase):
         r = await self.call("POST", "/channels/vk/check", json={"token": TOKEN_A})
         self.assertEqual(r.status_code, 502)
 
-    async def test_connect_stores_encrypted_and_hides_token(self):
+    async def test_connect_stores_plain_and_hides_token_from_crm(self):
         out = await self.connect()
         self.assertEqual(
             out,
@@ -215,8 +215,7 @@ class ChannelsDbTest(unittest.IsolatedAsyncioTestCase):
             },
         )
         row = (await self.sql("SELECT * FROM channels"))[0]
-        self.assertTrue(row["token_encrypted"].startswith("v1:"))
-        self.assertNotIn(TOKEN_A, row["token_encrypted"])
+        self.assertEqual((row["token"], row["token_encrypted"]), (TOKEN_A, None))
         self.assertEqual((row["platform"], row["external_id"]), ("vk", "10"))
         listing = await self.call("GET", "/channels/vk")
         for kind in ("crm", "bot"):
@@ -225,14 +224,18 @@ class ChannelsDbTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn(TOKEN_A[6:30], listing.text)
             self.assertEqual(listing.json()[0]["group_id"], 10)
 
-    async def test_connect_without_key_is_503(self):
-        self.key = None
-        r = await self.call("POST", "/channels/vk", json={"token": TOKEN_A})
-        self.assertEqual(r.status_code, 503)
-        self.assertEqual(await self.sql("SELECT 1 FROM channels"), [])
-        self.assertEqual((await self.call("GET", "/channels/vk/tokens", kind="bot")).status_code, 503)
-        r = await self.call("POST", "/channels/vk/import", kind="bot", json={"group_id": 1, "token": TOKEN_A})
-        self.assertEqual(r.status_code, 503)
+    async def test_works_without_channel_token_key(self):
+        # Settings собраны без CHANNEL_TOKEN_KEY: connect, import и tokens работают.
+        await self.connect()
+        r = await self.call("POST", "/channels/vk/import", kind="bot", json={"group_id": 30, "token": TOKEN_B})
+        self.assertEqual((r.status_code, r.json()), (200, {"stored": True}))
+        r = await self.call("GET", "/channels/vk/tokens", kind="bot")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual({c["group_id"]: c["token"] for c in r.json()["communities"]}, {10: TOKEN_A, 30: TOKEN_B})
+        # CRM не получает полный ключ ни в одном ответе
+        for resp in (await self.call("GET", "/channels/vk"), await self.call("POST", "/channels/vk/check", json={"token": TOKEN_A})):
+            self.assertNotIn(TOKEN_A, resp.text)
+        self.assertEqual((await self.call("GET", "/channels/vk/tokens", kind="crm")).status_code, 403)
 
     async def test_connect_reenables_and_keeps_old_channel_data(self):
         await self.sql("INSERT INTO channels (platform, external_id, title, enabled) VALUES ('vk', '10', '', FALSE)")
@@ -253,10 +256,10 @@ class ChannelsDbTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_replace_token_conflicts(self):
         await self.connect()
-        before = (await self.sql("SELECT token_encrypted FROM channels"))[0]["token_encrypted"]
+        before = (await self.sql("SELECT token FROM channels"))[0]["token"]
         r = await self.call("PUT", "/channels/vk/10/token", json={"token": TOKEN_B})
         self.assertEqual((r.status_code, r.json()["detail"]), (409, "Ключ от другого сообщества"))
-        self.assertEqual((await self.sql("SELECT token_encrypted FROM channels"))[0]["token_encrypted"], before)
+        self.assertEqual((await self.sql("SELECT token FROM channels"))[0]["token"], before)
         r = await self.call("PUT", "/channels/vk/20/token", json={"token": TOKEN_B})
         self.assertEqual(r.status_code, 404)
         r = await self.call("PUT", "/channels/vk/10/token", json={"token": "bad"})
@@ -286,29 +289,77 @@ class ChannelsDbTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.call("PATCH", "/channels/vk/999", json={"enabled": True})).status_code, 404)
         self.assertEqual((await self.call("PATCH", "/channels/vk/10", json={})).status_code, 422)
 
-    async def test_undecryptable_token_skipped_without_logging_it(self):
-        await self.connect(TOKEN_A)
-        await self.connect(TOKEN_B)
-        await self.sql("UPDATE channels SET token_encrypted = 'v1:AAAA' WHERE external_id = '10'")
-        with self.assertLogs("app.routers.channels", level=logging.ERROR) as logs:
-            r = await self.call("GET", "/channels/vk/tokens", kind="bot")
-        self.assertEqual([c["group_id"] for c in r.json()["communities"]], [20])
+    # ---------- перенос старых зашифрованных ключей ----------
+
+    async def old_row(self, gid, value, title="Старое"):
+        await self.sql(
+            "INSERT INTO channels (platform, external_id, title, token_encrypted, token_hint) VALUES ('vk', %s, %s, %s, 'h')",
+            (str(gid), title, value),
+        )
+
+    async def test_migration_moves_old_tokens(self):
+        await self.old_row(10, seal(KEY, 10, TOKEN_A))
+        await self.old_row(20, seal(KEY, 20, TOKEN_B))
+        await self.sql("INSERT INTO channels (platform, external_id, title) VALUES ('vk', '30', 'Без ключа')")
+        with self.assertLogs("app.channel_tokens", level=logging.INFO) as logs:
+            self.assertEqual(await channel_tokens.migrate_encrypted(self.pool, KEY), 2)
+        self.assertIn("Перенесено токенов сообществ ВК: 2", "\n".join(logs.output))
         self.assertNotIn(TOKEN_A, "\n".join(logs.output))
-        # зашифровано под другой ключ
-        self.key = "z" * 40
+        rows = {r["external_id"]: r for r in await self.sql("SELECT * FROM channels")}
+        self.assertEqual((rows["10"]["token"], rows["10"]["token_encrypted"]), (TOKEN_A, None))
+        self.assertEqual((rows["20"]["token"], rows["20"]["token_encrypted"]), (TOKEN_B, None))
+        self.assertEqual((rows["30"]["token"], rows["30"]["token_encrypted"]), (None, None))
         r = await self.call("GET", "/channels/vk/tokens", kind="bot")
-        self.assertEqual(r.json()["communities"], [])
+        self.assertEqual([c["token"] for c in r.json()["communities"]], [TOKEN_A, TOKEN_B])
+        # повтор ничего не делает
+        self.assertEqual(await channel_tokens.migrate_encrypted(self.pool, KEY), 0)
+        self.assertEqual({r["external_id"]: r["token"] for r in await self.sql("SELECT * FROM channels")}["10"], TOKEN_A)
+
+    async def test_migration_without_key_leaves_rows_and_does_not_fail(self):
+        sealed = seal(KEY, 10, TOKEN_A)
+        await self.old_row(10, sealed)
+        with self.assertLogs("app.channel_tokens", level=logging.WARNING) as logs:
+            self.assertEqual(await channel_tokens.migrate_encrypted(self.pool, None), 0)
+        self.assertIn("10", "\n".join(logs.output))
+        row = (await self.sql("SELECT token, token_encrypted FROM channels"))[0]
+        self.assertEqual((row["token"], row["token_encrypted"]), (None, sealed))
+        # строка без ключа: has_token = false, tokens её не отдаёт, import заполняет
+        self.assertFalse((await self.call("GET", "/channels/vk")).json()[0]["has_token"])
+        self.assertEqual((await self.call("GET", "/channels/vk/tokens", kind="bot")).json()["communities"], [])
+        r = await self.call("POST", "/channels/vk/import", kind="bot", json={"group_id": 10, "token": TOKEN_A})
+        self.assertEqual(r.json(), {"stored": True})
+        row = (await self.sql("SELECT token, token_encrypted FROM channels"))[0]
+        self.assertEqual((row["token"], row["token_encrypted"]), (TOKEN_A, None))
+
+    async def test_migration_skips_broken_rows_without_logging_token(self):
+        good = seal(KEY, 20, TOKEN_B)
+        await self.old_row(10, "v1:AAAA")
+        await self.old_row(20, good)
+        await self.old_row(30, seal("z" * 40, 30, TOKEN_A))  # другой ключ
+        with self.assertLogs("app.channel_tokens", level=logging.INFO) as logs:
+            self.assertEqual(await channel_tokens.migrate_encrypted(self.pool, KEY), 1)
+        text = "\n".join(logs.output)
+        self.assertIn("10", text)
+        for secret in (TOKEN_A, TOKEN_B, "AAAA", good):
+            self.assertNotIn(secret, text)
+        rows = {r["external_id"]: r for r in await self.sql("SELECT * FROM channels")}
+        self.assertEqual((rows["10"]["token"], rows["10"]["token_encrypted"]), (None, "v1:AAAA"))
+        self.assertEqual(rows["20"]["token"], TOKEN_B)
+        self.assertIsNone(rows["30"]["token"])
+        # сломанные строки не мешают следующему запуску
+        self.assertEqual(await channel_tokens.migrate_encrypted(self.pool, KEY), 0)
 
     # ---------- import ----------
 
     async def test_import_does_not_overwrite_or_enable(self):
         r = await self.call("POST", "/channels/vk/import", kind="bot", json={"group_id": 10, "title": "Клуб А", "token": TOKEN_A})
         self.assertEqual((r.status_code, r.json()), (200, {"stored": True}))
-        enc = (await self.sql("SELECT token_encrypted FROM channels"))[0]["token_encrypted"]
+        enc = (await self.sql("SELECT token FROM channels"))[0]["token"]
+        self.assertEqual(enc, TOKEN_A)
         r = await self.call("POST", "/channels/vk/import", kind="bot", json={"group_id": 10, "title": "x", "token": TOKEN_B})
         self.assertEqual(r.json(), {"stored": False})
         row = (await self.sql("SELECT * FROM channels"))[0]
-        self.assertEqual((row["token_encrypted"], row["title"]), (enc, "Клуб А"))
+        self.assertEqual((row["token"], row["title"]), (enc, "Клуб А"))
 
         await self.call("PATCH", "/channels/vk/10", json={"enabled": False})
         await self.call("POST", "/channels/vk/import", kind="bot", json={"group_id": 10, "token": TOKEN_B})

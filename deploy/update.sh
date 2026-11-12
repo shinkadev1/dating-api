@@ -114,8 +114,6 @@ default_env() {
 }
 
 ensure_secret CHAT_API_SERVICE_TOKEN
-# Шифрует ключи сообществ ВК, добавленные из CRM. Менять нельзя: старые ключи не расшифруются.
-ensure_secret CHANNEL_TOKEN_KEY
 require_secret CHAT_API_APP_TOKEN
 require_secret CLOUDFLARE_TUNNEL_TOKEN
 
@@ -307,9 +305,12 @@ min_length() {
     fail "$1 должен быть не короче 32 символов."
   fi
 }
-# Короче 32 знаков Settings не примет, и chat-api не поднимется. Ключ не подменяем молча:
-# новый ключ сделал бы сохранённые ключи сообществ нерасшифровываемыми. Деплой останавливается без вывода значения.
-min_length CHANNEL_TOKEN_KEY
+# CHANNEL_TOKEN_KEY больше не создаётся: ключи сообществ хранятся открытым текстом. Если ключ уже есть в .env,
+# он нужен только для однократного переноса старых записей; не удаляем и не подменяем его.
+# Короче 32 знаков Settings не примет, и chat-api не поднимется.
+if [ -n "$(env_value CHANNEL_TOKEN_KEY)" ]; then
+  min_length CHANNEL_TOKEN_KEY
+fi
 if [ "$payments" -eq 1 ]; then
   min_length PREMIUM_LINK_SECRET
   min_length PAY_AUTH_SECRET
