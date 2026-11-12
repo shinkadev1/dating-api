@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import unittest
-from types import SimpleNamespace
 
 import httpx
 
 from app.bridge import AccountLink, Bridge
+from app.chat_api import Demand, ModeDemand
 from app.engine import EngineAccount, EngineClient, EngineConflictError
 
 
 class FakeChatApi:
-    def __init__(self, phase: str = "idle", waiting: int = 1, hunting: int = 0) -> None:
+    def __init__(
+        self,
+        phase: str = "idle",
+        waiting: int = 1,
+        hunting: int = 0,
+        modes: dict[str, ModeDemand] | None = None,
+    ) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.modes: dict[str, str] = {}
         self._phase = phase
-        self._demand = SimpleNamespace(waiting=waiting, hunting=hunting)
+        self._demand = Demand(waiting=waiting, hunting=hunting, modes=modes or {})
 
     async def phase(self, account: str) -> str:
         return self._phase
@@ -23,8 +30,9 @@ class FakeChatApi:
     async def demand(self):
         return self._demand
 
-    async def hunt(self, account: str) -> None:
+    async def hunt(self, account: str, mode: str = "normal") -> None:
         self.calls.append(("hunt", account))
+        self.modes[account] = mode
 
     async def stop(self, account: str) -> None:
         self.calls.append(("stop", account))
@@ -48,10 +56,15 @@ class FakeEngine:
         self.calls.append(("stop", account))
 
 
-def make_bridge(chat_api: FakeChatApi, engine: FakeEngine, states: dict[str, str | None]) -> Bridge:
+def make_bridge(
+    chat_api: FakeChatApi,
+    engine: FakeEngine,
+    states: dict[str, str | None],
+    modes: dict[str, str] | None = None,
+) -> Bridge:
     bridge = Bridge(chat_api, engine, reconcile_interval=1, accounts_refresh=1, heartbeat=1)  # type: ignore[arg-type]
     for account, state in states.items():
-        bridge._links[account] = AccountLink(account, state=state)
+        bridge._links[account] = AccountLink(account, mode=(modes or {}).get(account, "normal"), state=state)
     return bridge
 
 
@@ -141,3 +154,76 @@ class BridgeLimitedTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BridgeModeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_adult_demand_hunts_only_adult_account(self) -> None:
+        chat_api = FakeChatApi(
+            waiting=1,
+            modes={"normal": ModeDemand(0, 0), "adult": ModeDemand(1, 0)},
+        )
+        engine = FakeEngine()
+        bridge = make_bridge(
+            chat_api, engine, {"main": "idle", "spec1": "idle"}, {"main": "normal", "spec1": "adult"}
+        )
+        await bridge._reconcile()
+        self.assertEqual(chat_api.calls, [("hunt", "spec1")])
+        self.assertEqual(chat_api.modes, {"spec1": "adult"})
+        self.assertEqual(engine.calls, [("start", "spec1")])
+
+    async def test_normal_demand_skips_adult_account(self) -> None:
+        chat_api = FakeChatApi(waiting=1, modes={"normal": ModeDemand(1, 0), "adult": ModeDemand(0, 0)})
+        engine = FakeEngine()
+        bridge = make_bridge(chat_api, engine, {"spec1": "idle"}, {"spec1": "adult"})
+        await bridge._reconcile()
+        self.assertEqual(chat_api.calls, [])
+        self.assertEqual(engine.calls, [])
+
+    async def test_both_modes_each_get_own_account(self) -> None:
+        chat_api = FakeChatApi(waiting=2, modes={"normal": ModeDemand(1, 0), "adult": ModeDemand(1, 0)})
+        engine = FakeEngine()
+        bridge = make_bridge(
+            chat_api,
+            engine,
+            {"a": "idle", "b": "idle", "spec1": "idle"},
+            {"a": "normal", "b": "normal", "spec1": "adult"},
+        )
+        await bridge._reconcile()
+        self.assertEqual(sorted(chat_api.modes.items()), [("a", "normal"), ("spec1", "adult")])
+
+    async def test_surplus_is_cancelled_per_mode(self) -> None:
+        chat_api = FakeChatApi(waiting=0, modes={"normal": ModeDemand(0, 0), "adult": ModeDemand(0, 1)})
+        engine = FakeEngine()
+        bridge = make_bridge(
+            chat_api,
+            engine,
+            {"a": "searching", "spec1": "searching"},
+            {"a": "normal", "spec1": "adult"},
+        )
+        await bridge._reconcile()
+        self.assertEqual(engine.calls, [("stop", "spec1")])
+
+    async def test_old_chat_api_without_modes_is_normal(self) -> None:
+        chat_api = FakeChatApi(waiting=1)
+        engine = FakeEngine()
+        bridge = make_bridge(chat_api, engine, {"spec1": "idle", "main": "idle"}, {"spec1": "adult"})
+        await bridge._reconcile()
+        self.assertEqual(chat_api.calls, [("hunt", "main")])
+
+    async def test_accounts_modes_parsed_and_refreshed(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": "old", "authorized": True, "state": "idle"},
+                    {"id": "spec1", "authorized": True, "state": "idle", "mode": "adult"},
+                ],
+            )
+
+        client = EngineClient("http://engine", "token")
+        await client._http.aclose()
+        client._http = httpx.AsyncClient(base_url="http://engine/api/v1", transport=httpx.MockTransport(handler))
+        accounts = await client.accounts()
+        await client.aclose()
+        self.assertEqual([a.mode for a in accounts], ["normal", "adult"])
+

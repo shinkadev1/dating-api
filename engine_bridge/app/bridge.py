@@ -83,6 +83,8 @@ def classify_engine_text(text: str) -> str:
 @dataclass(eq=False)
 class AccountLink:
     id: str
+    # Режим аккаунта из chat-engine: normal или adult. Аккаунт ищет собеседников только своего режима.
+    mode: str = "normal"
     # Состояние в chat-engine. None, пока WebSocket не прислал snapshot.
     state: str | None = None
     # После ухода собеседника в chat-engine ещё приходят реклама и опрос — их не пересылаем.
@@ -164,13 +166,18 @@ class Bridge:
             await asyncio.sleep(self._accounts_refresh)
 
     async def _refresh_accounts(self) -> None:
-        authorized = {account.id for account in await self._engine.accounts() if account.authorized}
-        for account in authorized - self._links.keys():
-            link = AccountLink(account)
+        authorized = {account.id: account.mode for account in await self._engine.accounts() if account.authorized}
+        for account in authorized.keys() - self._links.keys():
+            link = AccountLink(account, mode=authorized[account])
             link.task = asyncio.create_task(self._follow(link), name=f"engine-ws-{account}")
             self._links[account] = link
-            logger.info("Аккаунт chat-engine подключён: %s", account)
-        for account in self._links.keys() - authorized:
+            logger.info("Аккаунт chat-engine подключён: %s (режим %s)", account, link.mode)
+        for account, mode in authorized.items():
+            link = self._links[account]
+            if link.mode != mode:
+                logger.info("Режим аккаунта %s: %s -> %s", account, link.mode, mode)
+                link.mode = mode
+        for account in self._links.keys() - authorized.keys():
             link = self._links.pop(account)
             if link.task:
                 link.task.cancel()
@@ -404,27 +411,33 @@ class Bridge:
     async def _reconcile(self) -> None:
         """Число ищущих аккаунтов подгоняется под число людей, которым не нашлось живой пары."""
         demand = await self._chat_api.demand()
-        need = demand.waiting - demand.hunting
-        if need > 0:
-            now = asyncio.get_running_loop().time()
-            candidates = [
-                link for link in self._links.values() if link.state == "idle" and link.cooldown_until <= now
-            ]
-            for link in candidates[:need]:
-                await self._start_hunt(link)
-        elif need < 0:
-            for link in [link for link in self._links.values() if link.state == "searching"][:-need]:
-                async with link.lock:
-                    if link.state == "searching":
-                        logger.info("Аккаунт %s больше не нужен, поиск отменён", link.id)
-                        await self._stop_engine(link)
+        for mode in ("normal", "adult"):
+            # Спрос и аккаунты считаются отдельно по режимам: adult-аккаунт не закрывает спрос normal.
+            part = demand.for_mode(mode)
+            need = part.waiting - part.hunting
+            if need > 0:
+                now = asyncio.get_running_loop().time()
+                candidates = [
+                    link
+                    for link in self._links.values()
+                    if link.mode == mode and link.state == "idle" and link.cooldown_until <= now
+                ]
+                for link in candidates[:need]:
+                    await self._start_hunt(link)
+            elif need < 0:
+                searching = [link for link in self._links.values() if link.mode == mode and link.state == "searching"]
+                for link in searching[:-need]:
+                    async with link.lock:
+                        if link.state == "searching":
+                            logger.info("Аккаунт %s больше не нужен, поиск отменён", link.id)
+                            await self._stop_engine(link)
 
     async def _start_hunt(self, link: AccountLink) -> None:
         async with link.lock:
             if link.state != "idle":
                 return
             try:
-                await self._chat_api.hunt(link.id)
+                await self._chat_api.hunt(link.id, link.mode)
             except ChatApiError as exc:
                 logger.warning("Не отметил поиск аккаунта %s: %s", link.id, exc)
                 return

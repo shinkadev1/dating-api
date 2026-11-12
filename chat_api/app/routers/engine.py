@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Body, Depends, status
 
 from app.deps import Chat, EnginePeer, require_engine
-from app.schemas import EngineAttachOut, EngineDemandOut, StateOut
+from app.schemas import EngineAttachOut, EngineDemandOut, SearchIn, StateOut
 
 router = APIRouter(
     prefix="/engine",
@@ -28,14 +28,17 @@ async def demand(chat: Chat) -> EngineDemandOut:
 
 
 @router.post("/{account}/hunt", summary="Аккаунт chat-engine начал поиск")
-async def hunt(engine: EnginePeer, chat: Chat) -> StateOut:
-    """Отмечает, что аккаунт ищет собеседника в chat-engine. Живые люди его не находят."""
-    return await chat.engine_hunt(engine)
+async def hunt(engine: EnginePeer, chat: Chat, body: SearchIn | None = Body(default=None)) -> StateOut:
+    """Отмечает, что аккаунт ищет собеседника в chat-engine. Живые люди его не находят.
+
+    Тело `{"mode": "normal" | "adult"}` — режим аккаунта; без тела `normal`.
+    """
+    return await chat.engine_hunt(engine, body.mode if body else "normal")
 
 
 @router.post("/{account}/attach", summary="Отдать найденного собеседника человеку")
 async def attach(engine: EnginePeer, chat: Chat) -> EngineAttachOut:
-    """Связывает аккаунт с человеком, который ждёт дольше всех. Человек получает `partner_found`.
+    """Связывает аккаунт с человеком его режима (режим задан в `hunt`), который ждёт дольше всех. Человек получает `partner_found`.
 
     `attached=false`, если ждущих людей не осталось: тогда разговор в chat-engine нужно закрыть.
     """

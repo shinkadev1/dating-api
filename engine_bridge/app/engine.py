@@ -30,6 +30,12 @@ class EngineAccount:
     state: str | None
     # Конец лимита аккаунта (ISO datetime). Старый chat-engine поле не присылает.
     limited_until: str | None = None
+    # normal или adult. Старый chat-engine поле не присылает — это normal.
+    mode: str = "normal"
+
+
+def _mode(value: object) -> str:
+    return "adult" if value == "adult" else "normal"
 
 
 class EngineClient:
@@ -64,7 +70,7 @@ class EngineClient:
     async def accounts(self) -> list[EngineAccount]:
         body = await self._request("GET", "/accounts")
         return [
-            EngineAccount(str(item["id"]), bool(item["authorized"]), item.get("state"), item.get("limited_until"))
+            EngineAccount(str(item["id"]), bool(item["authorized"]), item.get("state"), item.get("limited_until"), _mode(item.get("mode")))
             for item in body
         ]
 

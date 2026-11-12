@@ -18,6 +18,7 @@ class SessionRow:
     phase: str
     partner: Peer | None
     dialog_id: int | None = None
+    mode: str = "normal"
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,7 @@ async def lock_matchmaking(conn: AsyncConnection) -> None:
 async def get_session(conn: AsyncConnection, peer: Peer) -> SessionRow | None:
     cursor = await conn.execute(
         """
-        SELECT phase, partner_id, partner_platform, partner_bot_key, dialog_id
+        SELECT phase, partner_id, partner_platform, partner_bot_key, dialog_id, mode
         FROM chat_sessions
         WHERE platform = %(platform)s AND bot_key = %(bot_key)s AND user_id = %(user_id)s
         """,
@@ -56,7 +57,7 @@ async def get_session(conn: AsyncConnection, peer: Peer) -> SessionRow | None:
             row["partner_bot_key"] or "",
             int(row["partner_id"]),
         )
-    return SessionRow(phase=row["phase"], partner=partner, dialog_id=row["dialog_id"])
+    return SessionRow(phase=row["phase"], partner=partner, dialog_id=row["dialog_id"], mode=row["mode"])
 
 
 async def open_dialog(conn: AsyncConnection, a: Peer, b: Peer) -> int:
@@ -153,14 +154,15 @@ async def set_idle(conn: AsyncConnection, peer: Peer, *, reason: str, ended_by: 
     return ended
 
 
-async def set_searching(conn: AsyncConnection, peer: Peer) -> list[DialogEnd]:
+async def set_searching(conn: AsyncConnection, peer: Peer, mode: str = "normal") -> list[DialogEnd]:
     ended = await _close_open_dialog(conn, peer, "stopped", None)
     await conn.execute(
         """
-        INSERT INTO chat_sessions (platform, bot_key, user_id, phase, searching_since)
-        VALUES (%(platform)s, %(bot_key)s, %(user_id)s, 'searching', NOW())
+        INSERT INTO chat_sessions (platform, bot_key, user_id, phase, searching_since, mode)
+        VALUES (%(platform)s, %(bot_key)s, %(user_id)s, 'searching', NOW(), %(mode)s)
         ON CONFLICT (platform, bot_key, user_id) DO UPDATE SET
             phase = 'searching',
+            mode = EXCLUDED.mode,
             partner_id = NULL,
             partner_platform = NULL,
             partner_bot_key = NULL,
@@ -168,7 +170,7 @@ async def set_searching(conn: AsyncConnection, peer: Peer) -> list[DialogEnd]:
             searching_since = NOW(),
             updated_at = NOW()
         """,
-        _key(peer),
+        {**_key(peer), "mode": mode},
     )
     return ended
 
@@ -196,8 +198,8 @@ def _peer(row: dict[str, Any]) -> Peer:
     return Peer(row["platform"], row["bot_key"] or "", int(row["user_id"]))
 
 
-async def find_searcher(conn: AsyncConnection, exclude: Peer) -> Peer | None:
-    """Живой человек, который дольше всех ждёт в очереди, кроме самого ищущего.
+async def find_searcher(conn: AsyncConnection, exclude: Peer, mode: str = "normal") -> Peer | None:
+    """Живой человек того же режима, который дольше всех ждёт в очереди, кроме самого ищущего.
 
     Аккаунты chat-engine в очереди не участвуют: их к человеку привязывает `engine_attach`.
     """
@@ -207,18 +209,19 @@ async def find_searcher(conn: AsyncConnection, exclude: Peer) -> Peer | None:
         FROM chat_sessions
         WHERE phase = 'searching' AND searching_since IS NOT NULL
           AND platform <> %(engine)s
+          AND mode = %(mode)s
           AND NOT (platform = %(platform)s AND bot_key = %(bot_key)s AND user_id = %(user_id)s)
         ORDER BY searching_since
         LIMIT 1
         """,
-        {**_key(exclude), "engine": ENGINE_PLATFORM},
+        {**_key(exclude), "engine": ENGINE_PLATFORM, "mode": mode},
     )
     row = await cursor.fetchone()
     return _peer(row) if row else None
 
 
-async def find_human_with_engine(conn: AsyncConnection) -> tuple[Peer, Peer] | None:
-    """Человек в диалоге с chat-engine, который дольше всех говорит с ботом.
+async def find_human_with_engine(conn: AsyncConnection, mode: str = "normal") -> tuple[Peer, Peer] | None:
+    """Человек в диалоге с chat-engine (в режиме mode), который дольше всех говорит с ботом.
 
     Живой ищущий забирает его из пары с ботом: люди важнее аккаунтов chat-engine.
     """
@@ -230,10 +233,11 @@ async def find_human_with_engine(conn: AsyncConnection) -> tuple[Peer, Peer] | N
           AND platform <> %(engine)s
           AND partner_platform = %(engine)s
           AND partner_id IS NOT NULL
+          AND mode = %(mode)s
         ORDER BY updated_at
         LIMIT 1
         """,
-        {"engine": ENGINE_PLATFORM},
+        {"engine": ENGINE_PLATFORM, "mode": mode},
     )
     row = await cursor.fetchone()
     if row is None:
@@ -243,29 +247,31 @@ async def find_human_with_engine(conn: AsyncConnection) -> tuple[Peer, Peer] | N
     return human, engine
 
 
-async def oldest_waiting_human(conn: AsyncConnection, min_wait_seconds: float) -> Peer | None:
-    """Человек, который ждёт в очереди дольше всех и не меньше min_wait_seconds."""
+async def oldest_waiting_human(conn: AsyncConnection, min_wait_seconds: float, mode: str = "normal") -> Peer | None:
+    """Человек режима mode, который ждёт в очереди дольше всех и не меньше min_wait_seconds."""
     cursor = await conn.execute(
         """
         SELECT platform, bot_key, user_id
         FROM chat_sessions
         WHERE phase = 'searching' AND searching_since IS NOT NULL
           AND platform <> %(engine)s
+          AND mode = %(mode)s
           AND searching_since <= NOW() - make_interval(secs => %(min_wait)s)
         ORDER BY searching_since
         LIMIT 1
         """,
-        {"engine": ENGINE_PLATFORM, "min_wait": min_wait_seconds},
+        {"engine": ENGINE_PLATFORM, "min_wait": min_wait_seconds, "mode": mode},
     )
     row = await cursor.fetchone()
     return _peer(row) if row else None
 
 
-async def engine_demand(conn: AsyncConnection, min_wait_seconds: float) -> tuple[int, int]:
-    """Сколько людей ждут не меньше min_wait_seconds и сколько аккаунтов chat-engine уже ищут."""
+async def engine_demand(conn: AsyncConnection, min_wait_seconds: float) -> dict[str, tuple[int, int]]:
+    """По режимам: сколько людей ждут не меньше min_wait_seconds и сколько аккаунтов chat-engine уже ищут."""
     cursor = await conn.execute(
         """
         SELECT
+            mode,
             count(*) FILTER (
                 WHERE platform <> %(engine)s
                   AND searching_since <= NOW() - make_interval(secs => %(min_wait)s)
@@ -273,11 +279,14 @@ async def engine_demand(conn: AsyncConnection, min_wait_seconds: float) -> tuple
             count(*) FILTER (WHERE platform = %(engine)s) AS hunting
         FROM chat_sessions
         WHERE phase = 'searching' AND searching_since IS NOT NULL
+        GROUP BY mode
         """,
         {"engine": ENGINE_PLATFORM, "min_wait": min_wait_seconds},
     )
-    row = await cursor.fetchone()
-    return int(row["waiting"]), int(row["hunting"])
+    result = {"normal": (0, 0), "adult": (0, 0)}
+    for row in await cursor.fetchall():
+        result[row["mode"]] = (int(row["waiting"]), int(row["hunting"]))
+    return result
 
 
 async def presence_stats(conn: AsyncConnection, online_window_seconds: float) -> dict[str, int]:

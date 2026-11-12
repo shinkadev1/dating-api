@@ -21,13 +21,14 @@ from app.schemas import (
     MediaOut,
     MessageIn,
     MessageOut,
+    SearchIn,
     PremiumLinkOut,
     StateOut,
     StopOut,
     TgSend,
     VisitIn,
 )
-from app.services.chat import NotChattingError
+from app.services.chat import ADULT_NEEDS_PREMIUM, AdultNeedsPremiumError, NotChattingError
 from app.services.media import StorageDisabled
 from app.services.storage import StorageError
 
@@ -59,8 +60,16 @@ async def state(peer: ServicePeer, chat: Chat) -> StateOut:
     return await chat.state(peer)
 
 
-@router.post("/search", summary="Искать собеседника")
-async def search(peer: HumanPeer, chat: Chat) -> StateOut:
+@router.post(
+    "/search",
+    summary="Искать собеседника",
+    responses={
+        status.HTTP_403_FORBIDDEN: {
+            "description": "mode=adult без премиума; detail «Пошлый чат доступен только с премиумом»"
+        },
+    },
+)
+async def search(peer: HumanPeer, chat: Chat, body: SearchIn | None = Body(default=None)) -> StateOut:
     """Ставит пользователя в очередь поиска.
 
     Если в очереди уже кто-то есть, пара создаётся сразу: ответ `chatting`,
@@ -68,8 +77,15 @@ async def search(peer: HumanPeer, chat: Chat) -> StateOut:
     а `partner_found` придёт пользователю событием, когда найдётся пара.
     Текущий диалог при этом закрывается, бывший собеседник получает
     `partner_left` с причиной `stopped`.
+
+    Тело необязательно: `{"mode": "normal" | "adult"}`, без тела — `normal`. Люди и аккаунты
+    chat-engine соединяются только внутри своего режима. `adult` («Пошлый чат») требует премиума:
+    без него 403 с «премиум» в detail.
     """
-    return await chat.search(peer)
+    try:
+        return await chat.search(peer, body.mode if body else "normal")
+    except AdultNeedsPremiumError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, ADULT_NEEDS_PREMIUM) from exc
 
 
 @router.post("/stop", summary="Закончить диалог или поиск")

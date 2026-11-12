@@ -1,5 +1,9 @@
 # Состояние vk-bot
 
+## Ветка feat/adult-chat, 2026-11-12
+
+От origin/master 7dc9e4a. «Пошлый чат»: `008_adult_mode.sql` (`chat_sessions.mode` normal|adult, DEFAULT normal, CHECK-констрейнт, идемпотентно), режим в `set_searching` и во всех выборках очереди (`find_searcher`, `find_human_with_engine`, `oldest_waiting_human`, `engine_demand` по режимам), `SearchIn` в `search` и `engine/{account}/hunt`, `EngineDemandOut.modes`, 403 для adult без премиума, engine_bridge считает спрос по режимам (`AccountLink.mode` из `/accounts`). Тесты: `chat_api/tests/test_adult_mode.py` (новый), правки `test_dialog_history.py` (сигнатуры подмены) и `engine_bridge/tests/test_bridge_limited.py`. Проверки (Python 3.13, Postgres через pgserver на 3.10 с добавленными tz-файлами): `pytest tests -q -rs` в `chat_api` — 129 passed, 0 skipped (было 113-114); `pytest tests` в `engine_bridge` — 13 passed; compileall — ok. Не проверялось: живые chat-engine/боты, деплой, миграция на боевой базе.
+
 ## Ветка feature/broadcasts, 2026-11-11
 
 От master 410264c. Рассылки, аналитика и люди для CRM. Добавлены `005_broadcasts.sql`, `app/broadcasts/{settings,service}.py`, `repositories/broadcasts.py`, `routers/broadcasts.py`, модели в `schemas.py`, клиент `crm` в `deps.py`/`config.py`, задача в `main.py`, `CHAT_API_CRM_TOKEN` в `docker-compose.yml` и `.env.example`, тест `tests/test_broadcasts_db.py`. Проверки (Python 3.13, Postgres 16 через TEST_DATABASE_URL): `pytest tests -q` в `chat_api` — 90 passed, 0 skipped (было 81); `compileall app` без ошибок; повторный ensure_schema без ошибок. Сквозная проверка: uvicorn + Postgres + Redis локально, Bot CRM (vite preview, настоящий `api/chat.js`, GitHub замокан) — разовая рассылка на 5 человек tg ушла за проход, в `chat:broadcast:tg` 5 событий `notice`; рассылка после события создаётся и ставится на паузу. Не проверялось: деплой, Cloudflare Access до api.chatwithyou.site из Vercel, доставка ботами в Telegram/ВК, фото через S3.

@@ -12,6 +12,13 @@ Phase = Literal["idle", "searching", "chatting"]
 LeftReason = Literal["stopped", "reported", "undeliverable"]
 
 
+ChatMode = Literal["normal", "adult"]
+
+
+class SearchIn(BaseModel):
+    mode: ChatMode = Field(default="normal", description="`normal` или `adult` («Пошлый чат», только с премиумом)")
+
+
 class StateOut(BaseModel):
     phase: Phase = Field(description="`idle` — вне чата, `searching` — в очереди, `chatting` — в диалоге")
 
@@ -107,9 +114,17 @@ class NoticeOut(BaseModel):
     queued: int = Field(description="Сколько диалогов получат текст")
 
 
+class ModeDemandOut(BaseModel):
+    waiting: int = 0
+    hunting: int = 0
+
+
 class EngineDemandOut(BaseModel):
-    waiting: int = Field(description="Людей в очереди дольше порога подбора бота")
-    hunting: int = Field(description="Аккаунтов chat-engine, которые уже ищут собеседника")
+    waiting: int = Field(description="Людей в очереди дольше порога подбора бота, все режимы")
+    hunting: int = Field(description="Аккаунтов chat-engine, которые уже ищут собеседника, все режимы")
+    modes: dict[str, ModeDemandOut] = Field(
+        default_factory=dict, description="То же по режимам: ключи `normal` и `adult`"
+    )
 
 
 class EngineAttachOut(BaseModel):

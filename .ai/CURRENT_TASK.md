@@ -1,5 +1,9 @@
 # Текущая задача
 
+## «Пошлый чат» — премиум-режим 18+ — 2026-11-12
+
+Задача LoopOS 2026-11-12-adult-chat, ветка `feat/adult-chat` от origin/master 7dc9e4a (worktree `.worktrees/vk-bot-adult-chat`). Одобрено пользователем. Статус: реализовано, локальный коммит, ждёт ревью; push/merge/деплой не выполнялись. Контракт (его реализуют параллельно chat-engine и боты): `GET /accounts` chat-engine отдаёт `mode` normal|adult; `POST .../search` принимает необязательное тело `{"mode"}`; adult без премиума — 403. Проверки — в [STATE.md](STATE.md). Выкладывать вместе: migration `008_adult_mode.sql` применяется при старте chat-api, engine_bridge без обновления chat-engine остаётся в normal.
+
 ## Промо премиума на 5-м, 15-м, 25-м… диалоге — 2026-11-12
 
 Задача LoopOS 2026-11-12-promo-every-10, ветка `loop/promo-every-10` (worktree `.worktrees/vk-bot-promo-every-10`). Доработка: вместо отложенного события `promo` — флаг `promo` в `partner_left` и в ответе `/stop`. Статус: реализовано, локальный коммит, ждёт ревью; не выкачено, push/merge не выполнялись. Боты должны уметь читать флаг до выкатки API (старый код бота флаг игнорирует). Проверки — в [STATE.md](STATE.md).

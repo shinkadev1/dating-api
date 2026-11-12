@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -20,9 +20,22 @@ class NotChattingError(ChatApiError):
 
 
 @dataclass(frozen=True)
+class ModeDemand:
+    waiting: int
+    hunting: int
+
+
+@dataclass(frozen=True)
 class Demand:
     waiting: int
     hunting: int
+    # Спрос по режимам. Старый Chat API поле не присылает — тогда весь спрос normal.
+    modes: dict[str, ModeDemand] = field(default_factory=dict)
+
+    def for_mode(self, mode: str) -> ModeDemand:
+        if not self.modes:
+            return ModeDemand(self.waiting, self.hunting) if mode == "normal" else ModeDemand(0, 0)
+        return self.modes.get(mode, ModeDemand(0, 0))
 
 
 class ChatApiClient:
@@ -110,10 +123,14 @@ class ChatApiClient:
 
     async def demand(self) -> Demand:
         body = await self._request("GET", "/engine/demand")
-        return Demand(waiting=int(body["waiting"]), hunting=int(body["hunting"]))
+        modes = {
+            str(name): ModeDemand(int(item.get("waiting", 0)), int(item.get("hunting", 0)))
+            for name, item in (body.get("modes") or {}).items()
+        }
+        return Demand(waiting=int(body["waiting"]), hunting=int(body["hunting"]), modes=modes)
 
-    async def hunt(self, account: str) -> None:
-        await self._request("POST", f"/engine/{account}/hunt")
+    async def hunt(self, account: str, mode: str = "normal") -> None:
+        await self._request("POST", f"/engine/{account}/hunt", {"mode": mode})
 
     async def attach(self, account: str) -> bool:
         """True, если найденный собеседник отдан ждущему человеку."""

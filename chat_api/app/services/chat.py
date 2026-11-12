@@ -25,6 +25,7 @@ from app.schemas import (
     EngineAttachOut,
     EngineDemandOut,
     LeftReason,
+    ModeDemandOut,
     MessageOut,
     Phase,
     PresenceOut,
@@ -55,6 +56,13 @@ _PROMO_PLATFORMS = ("vk", "tg")
 
 def _promo_due(count: int) -> bool:
     return count % PROMO_EVERY == PROMO_FIRST
+
+
+ADULT_NEEDS_PREMIUM = "Пошлый чат доступен только с премиумом"
+
+
+class AdultNeedsPremiumError(Exception):
+    """Режим adult без активного премиума."""
 
 
 class NotChattingError(Exception):
@@ -180,18 +188,18 @@ class ChatService:
             await self._notify_left(conn, partner, reason, outbox, ended, skip=peer)
         return True
 
-    async def _search(self, peer: Peer, left_reason: LeftReason) -> StateOut:
+    async def _search(self, peer: Peer, left_reason: LeftReason, mode: str = "normal") -> StateOut:
         outbox: Outbox = []
         ended: list[repo.DialogEnd] = []
         async with self._locked() as conn:
             await self._detach(conn, peer, left_reason, outbox, ended)
-            ended.extend(await repo.set_searching(conn, peer) or ())
+            ended.extend(await repo.set_searching(conn, peer, mode) or ())
             await repo.record_search(conn, peer)
             phase: Phase = "searching"
-            other = await repo.find_searcher(conn, peer)
+            other = await repo.find_searcher(conn, peer, mode)
             stolen = False
             if other is None and not peer.is_engine:
-                paired = await repo.find_human_with_engine(conn)
+                paired = await repo.find_human_with_engine(conn, mode)
                 if paired is not None:
                     other, engine = paired
                     ended.extend(await repo.set_idle(conn, engine, reason="stopped", ended_by=None) or ())
@@ -276,17 +284,24 @@ class ChatService:
                 return PARTNER_NEEDS_PREMIUM
         return None
 
-    async def search(self, peer: Peer) -> StateOut:
-        """Встаёт в очередь. Прежний собеседник узнаёт, что диалог закончен."""
-        return await self._search(peer, "stopped")
+    async def search(self, peer: Peer, mode: str = "normal") -> StateOut:
+        """Встаёт в очередь своего режима. Прежний собеседник узнаёт, что диалог закончен.
+
+        Режим adult требует активного премиума, иначе AdultNeedsPremiumError.
+        """
+        if mode == "adult":
+            async with self._pool.connection() as conn:
+                if not await repo.user_is_premium(conn, peer):
+                    raise AdultNeedsPremiumError
+        return await self._search(peer, "stopped", mode)
 
     async def report(self, peer: Peer) -> StateOut:
-        """Жалоба закрывает диалог и сразу ставит в поиск."""
+        """Жалоба закрывает диалог и сразу ставит в поиск в том же режиме, что и диалог."""
         async with self._pool.connection() as conn:
             session = await repo.get_session(conn, peer)
         if session is None or session.phase != "chatting":
             raise NotChattingError
-        return await self._search(peer, "reported")
+        return await self._search(peer, "reported", session.mode)
 
     async def stop(self, peer: Peer) -> StopOut:
         outbox: Outbox = []
@@ -395,16 +410,20 @@ class ChatService:
 
     async def engine_demand(self) -> EngineDemandOut:
         async with self._pool.connection() as conn:
-            waiting, hunting = await repo.engine_demand(conn, self._fallback_after)
-        return EngineDemandOut(waiting=waiting, hunting=hunting)
+            by_mode = await repo.engine_demand(conn, self._fallback_after)
+        return EngineDemandOut(
+            waiting=sum(w for w, _ in by_mode.values()),
+            hunting=sum(h for _, h in by_mode.values()),
+            modes={mode: ModeDemandOut(waiting=w, hunting=h) for mode, (w, h) in by_mode.items()},
+        )
 
-    async def engine_hunt(self, engine: Peer) -> StateOut:
+    async def engine_hunt(self, engine: Peer, mode: str = "normal") -> StateOut:
         """Аккаунт chat-engine начал поиск. В общую очередь он не попадает, пару ему даёт attach."""
         outbox: Outbox = []
         ended: list[repo.DialogEnd] = []
         async with self._locked() as conn:
             await self._detach(conn, engine, "stopped", outbox, ended)
-            ended.extend(await repo.set_searching(conn, engine) or ())
+            ended.extend(await repo.set_searching(conn, engine, mode) or ())
             self._mark_promo(outbox, await self._promo_targets(conn, ended, self._left_recipients(outbox)))
         await self._flush(outbox)
         return StateOut(phase="searching")
@@ -420,7 +439,7 @@ class ChatService:
             session = await repo.get_session(conn, engine)
             if session is None or session.phase != "searching":
                 return EngineAttachOut(attached=False, phase=session.phase if session else "idle")
-            human = await repo.oldest_waiting_human(conn, self._fallback_after)
+            human = await repo.oldest_waiting_human(conn, self._fallback_after, session.mode)
             if human is None:
                 await repo.set_idle(conn, engine, reason="stopped", ended_by=None)
                 return EngineAttachOut(attached=False, phase="idle")

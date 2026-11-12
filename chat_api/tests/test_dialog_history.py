@@ -77,20 +77,20 @@ class Repo:
         self.calls.append(("idle", peer, reason, ended_by))
         return self.ends.pop(peer, [])
 
-    async def set_searching(self, conn: object, peer: Peer) -> list[sessions_repo.DialogEnd]:
+    async def set_searching(self, conn: object, peer: Peer, mode: str = "normal") -> list[sessions_repo.DialogEnd]:
         self.calls.append(("searching", peer))
         return self.ends.pop(peer, [])
 
     async def record_search(self, conn: object, peer: Peer) -> None:
         pass
 
-    async def find_searcher(self, conn: object, peer: Peer) -> Peer | None:
+    async def find_searcher(self, conn: object, peer: Peer, mode: str = "normal") -> Peer | None:
         return self.searcher
 
-    async def find_human_with_engine(self, conn: object):  # type: ignore[no-untyped-def]
+    async def find_human_with_engine(self, conn: object, mode: str = "normal"):  # type: ignore[no-untyped-def]
         return self.with_engine
 
-    async def oldest_waiting_human(self, conn: object, wait: float) -> Peer | None:
+    async def oldest_waiting_human(self, conn: object, wait: float, mode: str = "normal") -> Peer | None:
         return self.waiting
 
     async def open_dialog(self, conn: object, a: Peer, b: Peer) -> int:
