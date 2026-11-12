@@ -248,6 +248,15 @@ class AdultDbTests(unittest.IsolatedAsyncioTestCase):
         await self.chat.report(A)
         self.assertEqual(await self.session(A), ("searching", "adult"))
 
+    async def test_report_falls_back_to_normal_when_premium_expired(self) -> None:
+        await self.premium(A, B)
+        await self.chat.search(A, "adult")
+        await self.chat.search(B, "adult")
+        await self.premium(A, active=False)
+        state = await self.chat.report(A)
+        self.assertEqual(state.phase, "searching")
+        self.assertEqual(await self.session(A), ("searching", "normal"))
+
 
 if __name__ == "__main__":
     unittest.main()

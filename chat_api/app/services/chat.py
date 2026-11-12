@@ -296,12 +296,18 @@ class ChatService:
         return await self._search(peer, "stopped", mode)
 
     async def report(self, peer: Peer) -> StateOut:
-        """Жалоба закрывает диалог и сразу ставит в поиск в том же режиме, что и диалог."""
+        """Жалоба закрывает диалог и сразу ставит в поиск в том же режиме, что и диалог.
+
+        Если диалог был adult, а премиум уже кончился, поиск идёт в normal: жалоба не должна падать.
+        """
         async with self._pool.connection() as conn:
             session = await repo.get_session(conn, peer)
-        if session is None or session.phase != "chatting":
-            raise NotChattingError
-        return await self._search(peer, "reported", session.mode)
+            if session is None or session.phase != "chatting":
+                raise NotChattingError
+            mode = session.mode
+            if mode == "adult" and not await repo.user_is_premium(conn, peer):
+                mode = "normal"
+        return await self._search(peer, "reported", mode)
 
     async def stop(self, peer: Peer) -> StopOut:
         outbox: Outbox = []
