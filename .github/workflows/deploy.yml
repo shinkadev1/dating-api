@@ -6,6 +6,8 @@ on:
     paths-ignore:
       - .github/workflows/deploy.yml
       - .github/workflows/server-logs.yml
+      - .github/workflows/daily-report.yml
+      - deploy/daily-report.sh
 
 concurrency:
   group: deploy-production
