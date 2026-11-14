@@ -140,9 +140,10 @@ class DailyPromoDbTest(unittest.IsolatedAsyncioTestCase):
         await self.link(web, 4, platform="web")
         self.assertEqual(await self.service().run_once(), 2)
         self.assertEqual(self.bus.people(), [("tg", 2), ("vk", 1)])
+        expected_screen, expected_text = bsettings.daily_promo_for(EVENING.date())
         for _, text, screen in self.bus.calls:
-            self.assertEqual(screen, "daily_promo")
-            self.assertEqual(text, bsettings.DAILY_PROMO_TEXT)
+            self.assertEqual(screen, expected_screen)
+            self.assertEqual(text, expected_text)
         self.assertEqual((await self.day_row())[0]["sent_count"], 2)
 
     async def test_person_in_two_communities_gets_one_via_latest_seen(self):
@@ -218,6 +219,15 @@ class DailyPromoDbTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.service().run_once(), 1)
         self.assertEqual(len(await self.day_row()), 2)
         self.assertEqual(len(self.bus.people()), 2)
+
+    async def test_screen_alternates_by_msk_day(self):
+        await self.link(await self.channel(), 1)
+        for day, screen in ((14, "daily_hello"), (15, "daily_promo"), (16, "daily_hello"), (13, "daily_promo")):
+            self.bus.calls.clear()
+            self.now = datetime(2026, 11, day, 20, 30, tzinfo=MSK)
+            self.assertEqual(await self.service().run_once(), 1, day)
+            self.assertEqual([c[2] for c in self.bus.calls], [screen], day)
+            self.assertEqual(self.bus.calls[0][1], dict(bsettings.DAILY_PROMO_ROTATION)[screen])
 
     async def test_failed_batch_is_rolled_back_and_retried(self):
         await self.link(await self.channel(), 1)

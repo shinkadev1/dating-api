@@ -152,6 +152,7 @@ class BroadcastService:
         send_at = row["send_at"]
         if now < send_at or local.hour >= settings.DAILY_PROMO_UNTIL_MSK:
             return 0
+        screen, text = settings.daily_promo_for(day)
         total = 0
         while True:
             try:
@@ -160,9 +161,7 @@ class BroadcastService:
                         conn, day, send_at, settings.DAILY_PROMO_PLATFORMS, limit=settings.BATCH_SIZE
                     )
                     if batch:
-                        await self._events.publish_notices(
-                            batch, settings.DAILY_PROMO_TEXT, screen=settings.DAILY_PROMO_SCREEN
-                        )
+                        await self._events.publish_notices(batch, text, screen=screen)
                         await promo_repo.add_sent(conn, day, len(batch))
             except asyncio.CancelledError:
                 raise
@@ -174,5 +173,5 @@ class BroadcastService:
             total += len(batch)
             await self._sleep(settings.BATCH_PAUSE_SECONDS)
         if total:
-            logger.info("Ежедневная рассылка %s: поставлено %s", day, total)
+            logger.info("Ежедневная рассылка %s (%s): поставлено %s", day, screen, total)
         return total

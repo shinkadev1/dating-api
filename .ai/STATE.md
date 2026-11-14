@@ -1,5 +1,9 @@
 # Состояние vk-bot
 
+## Вторая ежедневная рассылка «Привет», 2026-11-14 (задача 59046)
+
+Dating API: `broadcasts/settings.py` — `DAILY_PROMO_ROTATION_START = 2026-11-14`, `DAILY_PROMO_ROTATION` (daily_hello, daily_promo) и `daily_promo_for(day)` вместо `DAILY_PROMO_SCREEN/TEXT`; `BroadcastService._send_daily` берёт экран и запасной текст по дню МСК. Миграции нет. Тест `test_screen_alternates_by_msk_day`. Проверки: `pytest tests -q` в chat_api на локальном Postgres 16 — 185 passed; `compileall app` ok; `git diff --check` ok. Подробности — [tasks/59046.md](tasks/59046.md).
+
 ## Ветка loop/daily-broadcast, 2026-11-12
 
 От origin/master. Ежедневная рассылка-промо: `supabase/init/011_daily_promo.sql` (подхватывается glob `*.sql` в `app/db.py`, регистрация не нужна), `repositories/daily_promo.py`, `BroadcastService._send_daily` (параметры `daily_promo`, `rand`), `DAILY_PROMO_*` в `broadcasts/settings.py`, `ChatEvent.screen` и `publish_notices(..., screen=)`, `daily_promo_enabled` в config/main, `DAILY_PROMO_ENABLED` в compose (по умолчанию `true`) и `.env.example`. Тесты: `tests/test_daily_promo_db.py` (12). Проверки: Python 3.13 + Postgres (pgserver из Python 3.10 с tz-файлами из tzdata, TEST_DATABASE_URL), `pytest tests -q -rs` в `chat_api` — 184 passed, 0 skipped; `compileall app` ok; `docker compose config -q` ok (с подставными токенами); `git diff --check origin/master` ok. Не проверялось: деплой, миграция на боевой базе, доставка ботами (dating-bot-vk/tg — отдельные ветки), реальный объём получателей.

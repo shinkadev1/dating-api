@@ -1,5 +1,9 @@
 # Текущая задача
 
+## Вторая ежедневная рассылка «Привет», 2026-11-14 (задача 59046)
+
+Dating API: `broadcasts/settings.py` — `DAILY_PROMO_ROTATION_START = 2026-11-14`, `DAILY_PROMO_ROTATION` (daily_hello, daily_promo) и `daily_promo_for(day)` вместо `DAILY_PROMO_SCREEN/TEXT`; `BroadcastService._send_daily` берёт экран и запасной текст по дню МСК. Миграции нет. Тест `test_screen_alternates_by_msk_day`. Проверки: `pytest tests -q` в chat_api на локальном Postgres 16 — 185 passed; `compileall app` ok; `git diff --check` ok. Подробности — [tasks/59046.md](tasks/59046.md).
+
 ## Размытое фото для получателя без премиума — 2026-11-12
 
 Задача LoopOS 2026-11-12-photo-blur, ветка `loop/photo-blur` (worktree `.worktrees/vk-bot-photo-blur`). Одобрено пользователем. Реализовано в chat_api, проверки в STATE.md, не выкачено. Дальше: ревью, клиенты ботов/Worker для `media.locked`, деплой.
