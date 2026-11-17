@@ -20,6 +20,7 @@ from app.reminders.service import ReminderService
 from app.routers import analytics, broadcasts, channels, engine, media, peers, stats, users, visitors, ws
 from app.services.archive import MessageArchiver
 from app.services.chat import ChatService
+from app.services.inactivity import InactivitySweeper
 from app.services.media import MediaService
 from app.services.storage import ObjectStorage
 
@@ -63,6 +64,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ).run(),
         name="broadcasts",
     )
+    inactivity_task = asyncio.create_task(
+        InactivitySweeper(
+            pool,
+            app.state.chat,
+            minutes=settings.dialog_inactivity_minutes,
+            silent_hours=settings.dialog_inactivity_silent_hours,
+        ).run(),
+        name="dialog-inactivity",
+    )
     app.state.hub = hub
     app.state.pool = pool
     app.state.redis = redis
@@ -73,7 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        for task in (reminders_task, broadcasts_task):
+        for task in (reminders_task, broadcasts_task, inactivity_task):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task

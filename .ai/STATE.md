@@ -1,5 +1,9 @@
 # Состояние vk-bot
 
+## Автозакрытие молчащих диалогов, ветка fix/dialog-inactivity-timeout, 2026-11-17
+
+От master. Миграция `supabase/init/012_dialog_inactivity.sql` (применяется при старте chat-api через `ensure_schema`): `chat_sessions.last_activity_at` (NULL -> updated_at) и `dialogs.end_reason` += `inactive` (CHECK заменяется только если в нём ещё нет `inactive`). `services/inactivity.py` `InactivitySweeper` (advisory lock `7_310_005`, раз в 120 с, пачки по 200, до 2000 за проход) вызывает `ChatService.close_inactive`: перепроверка простоя под `_locked`, `_detach(by_service=True)` (ended_by NULL), обоим `partner_left reason=inactive`; простой >= `DIALOG_INACTIVITY_SILENT_HOURS` — тихо людям, chat-engine уведомляется всегда. `inactive` не увеличивает `dialogs_ended` (нет промо). Активность: `set_chatting` и `send_message`/`forward_media` (`repo.touch_activity` обоим). Настройки: `DIALOG_INACTIVITY_MINUTES` (30, 0 = выкл.), `DIALOG_INACTIVITY_SILENT_HOURS` (24); в docker-compose пока не проброшены (работают значения по умолчанию). Тесты `tests/test_inactivity_db.py` (11); весь набор на Postgres (pgserver) — 196 passed. Не проверялось: боевая база, боты (читал код: reason сравнивается только с `undeliverable`, `inactive` -> обычный текст партнёра), chat-engine вживую.
+
 ## Вторая ежедневная рассылка «Привет», 2026-11-14 (задача 59046)
 
 Dating API: `broadcasts/settings.py` — `DAILY_PROMO_ROTATION_START = 2026-11-14`, `DAILY_PROMO_ROTATION` (daily_hello, daily_promo) и `daily_promo_for(day)` вместо `DAILY_PROMO_SCREEN/TEXT`; `BroadcastService._send_daily` берёт экран и запасной текст по дню МСК. Миграции нет. Тест `test_screen_alternates_by_msk_day`. Проверки: `pytest tests -q` в chat_api на локальном Postgres 16 — 185 passed; `compileall app` ok; `git diff --check` ok. Подробности — [tasks/59046.md](tasks/59046.md).

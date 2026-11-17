@@ -152,6 +152,7 @@ class ChatService:
         ended: list[repo.DialogEnd],
         *,
         skip: Peer,
+        by_service: bool = False,
     ) -> None:
         """Снимает собеседника и сообщает ему об уходе. Если у него ещё висит chat-engine — закрывает и его."""
         session = await repo.get_session(conn, other)
@@ -160,10 +161,11 @@ class ChatService:
             if session is not None and session.partner is not None and session.partner != skip
             else None
         )
-        ended.extend(await repo.set_idle(conn, other, reason=reason, ended_by=skip) or ())
+        by = None if by_service else skip
+        ended.extend(await repo.set_idle(conn, other, reason=reason, ended_by=by) or ())
         outbox.append((other, ChatEvent(type="partner_left", reason=reason)))
         if extra is not None:
-            ended.extend(await repo.set_idle(conn, extra, reason=reason, ended_by=skip) or ())
+            ended.extend(await repo.set_idle(conn, extra, reason=reason, ended_by=by) or ())
             outbox.append((extra, ChatEvent(type="partner_left", reason=reason)))
 
     async def _detach(
@@ -173,8 +175,12 @@ class ChatService:
         reason: LeftReason,
         outbox: Outbox,
         ended: list[repo.DialogEnd],
+        *,
+        by_service: bool = False,
     ) -> bool:
         """Снимает пользователя с поиска или диалога. True, если было что снимать.
+
+        by_service - диалог закрыл сервис (автозакрытие): ended_by в истории остаётся NULL.
 
         Сообщает собеседнику даже если связь в сессиях уже несимметрична: иначе
         человек, которому нашли пару, не узнает, что второй нажал «Следующий».
@@ -183,10 +189,40 @@ class ChatService:
         if session is None or session.phase == "idle":
             return False
         partner = session.partner if session.phase == "chatting" else None
-        ended.extend(await repo.set_idle(conn, peer, reason=reason, ended_by=peer) or ())
+        ended.extend(await repo.set_idle(conn, peer, reason=reason, ended_by=None if by_service else peer) or ())
         if partner is not None:
-            await self._notify_left(conn, partner, reason, outbox, ended, skip=peer)
+            await self._notify_left(conn, partner, reason, outbox, ended, skip=peer, by_service=by_service)
         return True
+
+    async def close_inactive(self, peer: Peer, min_idle_seconds: float, silent_after_seconds: float) -> bool:
+        """Закрывает молчащий диалог peer и его собеседника. False - условие уже не выполняется.
+
+        Условие перепроверяется под блокировкой пар: реплика могла прийти после выборки.
+        Если молчат дольше silent_after_seconds (давний бэклог), людям событие не шлём;
+        chat-engine узнаёт всегда, иначе аккаунт останется занятым.
+        """
+        outbox: Outbox = []
+        ended: list[repo.DialogEnd] = []
+        async with self._locked() as conn:
+            idle = await repo.idle_seconds(conn, peer)
+            if idle is None or idle < min_idle_seconds:
+                return False
+            if not await self._detach(conn, peer, "inactive", outbox, ended, by_service=True):
+                return False
+            # Инициатора диалога тоже уведомляем: при stop он узнаёт итог из HTTP-ответа, здесь ответа нет.
+            outbox.append((peer, ChatEvent(type="partner_left", reason="inactive")))
+            if idle >= silent_after_seconds:
+                outbox[:] = [(r, ev) for r, ev in outbox if r.is_engine]
+        await self._flush(outbox)
+        return True
+
+    async def _touch(self, peer: Peer, partner: Peer) -> None:
+        """Отмечает активность пары. Сбой не должен ломать доставку реплики."""
+        try:
+            async with self._pool.connection() as conn:
+                await repo.touch_activity(conn, peer, partner)
+        except Exception as exc:
+            logger.warning("Не отметил активность диалога: %s", type(exc).__name__)
 
     async def _search(self, peer: Peer, left_reason: LeftReason, mode: str = "normal") -> StateOut:
         outbox: Outbox = []
@@ -329,6 +365,7 @@ class ChatService:
             partner = await self._linked_partner(conn, peer, session)
         if partner is not None:
             await self._events.publish(partner, ChatEvent(type="message", text=text))
+            await self._touch(peer, partner)
             await self._record(session.dialog_id, peer, partner, kind="text", status="delivered", text=text)
             return MessageOut(delivered=True, phase="chatting")
         outbox: Outbox = []
@@ -411,6 +448,7 @@ class ChatService:
                 logger.info(
                     "Размытое фото %s -> %s/%s/%s", copy_id, partner.platform, partner.bot_key, partner.user_id
                 )
+                await self._touch(peer, partner)
                 await self._record(session.dialog_id, peer, partner, status="delivered", **fields)
                 return "sent"
         await self._events.publish(
@@ -432,6 +470,7 @@ class ChatService:
             partner.bot_key,
             partner.user_id,
         )
+        await self._touch(peer, partner)
         await self._record(session.dialog_id, peer, partner, status="delivered", **fields)
         return "sent"
 

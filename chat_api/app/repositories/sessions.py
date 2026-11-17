@@ -90,7 +90,8 @@ async def _close_open_dialog(
     """Закрывает открытый диалог сессии peer. Уже закрытый не перезаписывается.
 
     ended_by — кто закончил диалог; None — закрыл сервис (NULL в ended_by).
-    Если диалог закрыт именно сейчас, каждому человеку (не chat-engine) +1 к dialogs_ended.
+    Если диалог закрыт именно сейчас, каждому человеку (не chat-engine) +1 к dialogs_ended,
+    кроме причины inactive (автозакрытие по бездействию).
     """
     cursor = await conn.execute(
         """
@@ -123,7 +124,8 @@ async def _close_open_dialog(
     ended: list[DialogEnd] = []
     for side in ("a", "b"):
         side_peer = Peer(row[f"{side}_platform"], row[f"{side}_bot_key"] or "", int(row[f"{side}_user_id"]))
-        if side_peer.is_engine:
+        # Автозакрытие молчащего диалога не считается завершённым диалогом: промо премиума не показываем.
+        if side_peer.is_engine or reason == "inactive":
             continue
         counter = await conn.execute(
             """
@@ -181,7 +183,8 @@ async def set_chatting(conn: AsyncConnection, peer: Peer, partner: Peer, dialog_
         UPDATE chat_sessions
         SET phase = 'chatting', partner_id = %(partner_id)s,
             partner_platform = %(partner_platform)s, partner_bot_key = %(partner_bot_key)s,
-            dialog_id = %(dialog_id)s, searching_since = NULL, updated_at = NOW()
+            dialog_id = %(dialog_id)s, searching_since = NULL, updated_at = NOW(),
+            last_activity_at = NOW()
         WHERE platform = %(platform)s AND bot_key = %(bot_key)s AND user_id = %(user_id)s
         """,
         {
@@ -192,6 +195,50 @@ async def set_chatting(conn: AsyncConnection, peer: Peer, partner: Peer, dialog_
             "dialog_id": dialog_id,
         },
     )
+
+
+async def touch_activity(conn: AsyncConnection, *peers: Peer) -> None:
+    """Реплика в паре: обновляет last_activity_at у переданных сторон (только в диалоге)."""
+    for peer in peers:
+        await conn.execute(
+            """
+            UPDATE chat_sessions SET last_activity_at = NOW()
+            WHERE platform = %(platform)s AND bot_key = %(bot_key)s AND user_id = %(user_id)s
+              AND phase = 'chatting'
+            """,
+            _key(peer),
+        )
+
+
+async def find_inactive(conn: AsyncConnection, min_idle_seconds: float, limit: int) -> list[Peer]:
+    """Сессии в диалоге, где последняя активность старше min_idle_seconds. Самые старые первыми."""
+    cursor = await conn.execute(
+        """
+        SELECT platform, bot_key, user_id
+        FROM chat_sessions
+        WHERE phase = 'chatting'
+          AND COALESCE(last_activity_at, updated_at) < NOW() - make_interval(secs => %(idle)s)
+        ORDER BY COALESCE(last_activity_at, updated_at)
+        LIMIT %(limit)s
+        """,
+        {"idle": min_idle_seconds, "limit": limit},
+    )
+    return [_peer(row) for row in await cursor.fetchall()]
+
+
+async def idle_seconds(conn: AsyncConnection, peer: Peer) -> float | None:
+    """Сколько секунд в диалоге молчат; None — сессия не в диалоге."""
+    cursor = await conn.execute(
+        """
+        SELECT EXTRACT(EPOCH FROM NOW() - COALESCE(last_activity_at, updated_at)) AS idle
+        FROM chat_sessions
+        WHERE platform = %(platform)s AND bot_key = %(bot_key)s AND user_id = %(user_id)s
+          AND phase = 'chatting'
+        """,
+        _key(peer),
+    )
+    row = await cursor.fetchone()
+    return None if row is None else float(row["idle"])
 
 
 def _peer(row: dict[str, Any]) -> Peer:

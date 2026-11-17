@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # Ежедневная массовая рассылка-промо (vk/tg, случайное время 19-21 МСК). False - выключить.
     daily_promo_enabled: bool = False
 
+    # Диалог, где никто не писал столько минут, закрывается сам. 0 - выключено.
+    dialog_inactivity_minutes: int = Field(30, ge=0)
+    # Если молчат дольше стольких часов (давний бэклог), закрываем тихо: людям событий не шлём.
+    dialog_inactivity_silent_hours: float = Field(24, gt=0)
+
     # S3-совместимое хранилище медиа. Без любого из значений загрузка выключена.
     s3_endpoint_url: str | None = None
     s3_region: str = "ru1"

@@ -9,7 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 
 Phase = Literal["idle", "searching", "chatting"]
-LeftReason = Literal["stopped", "reported", "undeliverable"]
+LeftReason = Literal["stopped", "reported", "undeliverable", "inactive"]
 
 
 ChatMode = Literal["normal", "adult"]
