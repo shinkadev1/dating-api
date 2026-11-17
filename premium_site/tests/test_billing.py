@@ -39,6 +39,39 @@ class FakeResponse:
         if self.status_code>=400: raise httpx.HTTPStatusError('x',request=None,response=self)
 
 
+class CredentialsTests(unittest.TestCase):
+    PAIRS={'YOOKASSA_SHOP_ID':'main-shop','YOOKASSA_SECRET_KEY':'main-key','YOOKASSA_TEST_SHOP_ID':'test-shop','YOOKASSA_TEST_SECRET_KEY':'test-key'}
+
+    def creds(self,**env):
+        with patch.dict(os.environ,self.PAIRS|env): return billing.yookassa_credentials()
+
+    def test_test_mode_uses_test_pair(self):
+        self.assertEqual(self.creds(YOOKASSA_TEST_MODE='true'),('test-shop','test-key'))
+
+    def test_live_mode_ignores_test_pair(self):
+        self.assertEqual(self.creds(YOOKASSA_TEST_MODE='false'),('main-shop','main-key'))
+
+    def test_test_mode_falls_back_to_main_pair(self):
+        for missing in ('YOOKASSA_TEST_SHOP_ID','YOOKASSA_TEST_SECRET_KEY'):
+            with self.subTest(missing=missing): self.assertEqual(self.creds(YOOKASSA_TEST_MODE='true',**{missing:''}),('main-shop','main-key'))
+
+    def test_request_uses_selected_pair(self):
+        for mode,expected in (('true',('test-shop','test-key')),('false',('main-shop','main-key'))):
+            with self.subTest(mode=mode),patch.dict(os.environ,self.PAIRS|{'YOOKASSA_TEST_MODE':mode}),patch.object(billing.httpx,'request',return_value=FakeResponse(200,{})) as request:
+                billing.Provider().request('GET','payments/x')
+            self.assertEqual(request.call_args.kwargs['auth'],expected)
+
+    def test_validate_checks_account_id_of_selected_shop(self):
+        order={'id':uuid4(),'amount_rub':1,'payment_id':'payment'}
+        payment=lambda shop,test:{'id':'payment','recipient':{'account_id':shop},'test':test,'amount':{'value':'1.00','currency':'RUB'},'metadata':{'order_id':str(order['id'])}}
+        with patch.dict(os.environ,self.PAIRS|{'YOOKASSA_TEST_MODE':'true'}):
+            billing.Provider().validate(payment('test-shop',True),order)
+            with self.assertRaises(HTTPException): billing.Provider().validate(payment('main-shop',True),order)
+        with patch.dict(os.environ,self.PAIRS|{'YOOKASSA_TEST_MODE':'false'}):
+            billing.Provider().validate(payment('main-shop',False),order)
+            with self.assertRaises(HTTPException): billing.Provider().validate(payment('test-shop',False),order)
+
+
 class ProviderErrorTests(unittest.TestCase):
     def call(self,status,method='POST',body=None):
         with patch.dict(os.environ,{'YOOKASSA_SHOP_ID':'shop','YOOKASSA_SECRET_KEY':'secret-value'}),patch.object(billing.httpx,'request',return_value=FakeResponse(status,body)):

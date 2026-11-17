@@ -29,15 +29,17 @@ gh secret set ENV_FILE --repo shinkadev1/dating-api < .env.production
 
 ```
 PAYMENTS_ENABLED=true
-YOOKASSA_SHOP_ID=<id тестового магазина>
-YOOKASSA_SECRET_KEY=<test_…>
+YOOKASSA_TEST_SHOP_ID=<id тестового магазина>
+YOOKASSA_TEST_SECRET_KEY=<test_…>
+YOOKASSA_SHOP_ID=<id боевого магазина>
+YOOKASSA_SECRET_KEY=<live_…>
 YOOKASSA_TEST_MODE=true
 YOOKASSA_RECEIPT_MODE=exempt
 PREMIUM_LINK_SECRET=<случайные 48+ символов>
 PAY_AUTH_SECRET=<случайные 48+ символов>
 ```
 
-Переход на боевой магазин: в `.env.production` замените `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` боевые, `YOOKASSA_TEST_MODE=false`; для чеков `YOOKASSA_RECEIPT_MODE=receipt` и ключи ниже. Выложите файл в `ENV_FILE`, затем Actions → Deploy → Re-run. `PREMIUM_LINK_SECRET` и `PAY_AUTH_SECRET` не меняйте без нужды: смена разлогинит покупателей и сделает недействительными выданные ссылки.
+Переход на боевой магазин: в `.env.production` поставьте `YOOKASSA_TEST_MODE=false` (боевая пара `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` уже лежит рядом с тестовой); для чеков `YOOKASSA_RECEIPT_MODE=receipt` и ключи ниже. Выложите файл в `ENV_FILE`, затем Actions → Deploy → Re-run. `PREMIUM_LINK_SECRET` и `PAY_AUTH_SECRET` не меняйте без нужды: смена разлогинит покупателей и сделает недействительными выданные ссылки.
 
 Без чеков (`exempt`) Resend не обязателен: покупатель входит по ссылке из бота, вход по email отвечает «Письмо не отправлено». В режиме `receipt` нужны `RESEND_API_KEY` и `AUTH_MAIL_FROM` — чеку нужен email.
 
@@ -49,7 +51,8 @@ PAY_AUTH_SECRET=<случайные 48+ символов>
 Обязательные для оплаты:
 - `PREMIUM_LINK_SECRET`: не короче 32 символов. Тот же секрет подписывает ссылки в Chat API.
 - `PAY_AUTH_SECRET`: не короче 32 символов.
-- `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY`: сначала ключи **тестового** магазина.
+- `YOOKASSA_TEST_SHOP_ID`, `YOOKASSA_TEST_SECRET_KEY`: ключи **тестового** магазина; используются при `YOOKASSA_TEST_MODE=true`. Если не заданы, при `true` берётся основная пара (обратная совместимость).
+- `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY`: ключи **боевого** магазина; используются при `YOOKASSA_TEST_MODE=false` (тестовая пара тогда игнорируется).
 - `RESEND_API_KEY`, `AUTH_MAIL_FROM` (только для `receipt`): например `neon chat <noreply@chatwithyou.site>`. Домен должен быть подтверждён в Resend.
 - `YOOKASSA_VAT_CODE`, `YOOKASSA_PAYMENT_SUBJECT`: для чеков (режим `receipt`). Значения уточните у бухгалтерии или в настройках онлайн-кассы ЮKassa.
 
@@ -101,7 +104,7 @@ PAY_AUTH_SECRET=<случайные 48+ символов>
 
 ## 8. Боевые ключи
 
-В ENV_FILE замените `YOOKASSA_SHOP_ID` и `YOOKASSA_SECRET_KEY` на боевые и поставьте `YOOKASSA_TEST_MODE=false`. В боевом магазине настройте те же HTTP-уведомления и кассу. Перезапустите последний деплой (Actions → Deploy → Re-run) и проведите одну реальную оплату минимального тарифа.
+В ENV_FILE держите боевые `YOOKASSA_SHOP_ID` и `YOOKASSA_SECRET_KEY` рядом с тестовыми `YOOKASSA_TEST_SHOP_ID`, `YOOKASSA_TEST_SECRET_KEY`. Переключение режима — смена одной строки `YOOKASSA_TEST_MODE` (`true`/`false`), затем `gh secret set ENV_FILE` и Actions → Deploy → Re-run. В боевом магазине настройте те же HTTP-уведомления и кассу. Перезапустите последний деплой (Actions → Deploy → Re-run) и проведите одну реальную оплату минимального тарифа.
 
 ## 9. Откат
 
@@ -119,7 +122,7 @@ PAY_AUTH_SECRET=<случайные 48+ символов>
 3. Переменные окружения (имена; значения подставьте сами):
    - `PAY_PUBLIC_URL=http://127.0.0.1:8000`, `PAY_SECURE_COOKIE=false`;
    - `PAY_AUTH_SECRET` и `PREMIUM_LINK_SECRET` — любые строки не короче 32 символов;
-   - `YOOKASSA_SHOP_ID`, `YOOKASSA_SECRET_KEY` — ключи тестового магазина, `YOOKASSA_TEST_MODE=true`;
+   - `YOOKASSA_TEST_SHOP_ID`, `YOOKASSA_TEST_SECRET_KEY` — ключи тестового магазина, `YOOKASSA_TEST_MODE=true` (без тестовой пары берётся `YOOKASSA_SHOP_ID`/`YOOKASSA_SECRET_KEY`);
    - `YOOKASSA_RECEIPT_MODE=exempt` — без онлайн-кассы (чек не отправляется). Для режима `receipt` нужны `YOOKASSA_VAT_CODE`, `YOOKASSA_PAYMENT_SUBJECT` и вход по email (`RESEND_API_KEY`, `AUTH_MAIL_FROM`).
 4. Запуск из `premium_site`: `uvicorn app.main:app --port 8000`. Проверка: `http://127.0.0.1:8000/health` → `{"status":"ok"}`.
 5. Вход по подписанной ссылке (почта не нужна). Сгенерируйте токен тем же `PREMIUM_LINK_SECRET`, из каталога `premium_site`:

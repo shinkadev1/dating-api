@@ -42,6 +42,14 @@ Dating API: `broadcasts/settings.py` — `DAILY_PROMO_ROTATION_START = 2026-11-1
 
 ## Прошлая задача
 
+## Production-деплой TLS-обхода — 2026-11-01
+
+Коммит `b131430` с одной правкой `engine_bridge/app/engine.py` отправлен в `master` из чистой выпускной ветки. Workflow деплоя успешно завершился: https://github.com/shinkadev1/dating-api/actions/runs/41239461193 . После обновления `vk-chat-api` healthy, bridge подключил аккаунт `main`, повторный срез не показал новых таймаутов bridge: https://github.com/shinkadev1/dating-api/actions/runs/41239715848 . Reviewer PASS до деплоя; реальный поиск пары ещё не проверен. Локальные посторонние изменения не включены в выпуск.
+
+## Диагностика поиска VK — 2026-11-01
+
+По запросу пользователя изучены production-логи и выполнены сетевые проверки из `vk-engine-bridge` и с хоста API через временную ветку `diagnose-engine-network` (текущий диагностический коммит `61b14a1`). TLS 1.2 к Cloudflare IP hostname `bots.chatwithyou.site` проходит, TLS 1.3 на том же IP/SNI зависает; кто нарушает TLS 1.3, не установлено. Planner предложил адресный обход. Локально изменён только `engine_bridge/app/engine.py`: HTTP и WSS к chat-engine используют проверяющий SSLContext с TLS 1.2. Проверены синтаксис и diff check; reviewer и production-проверка ожидаются. Ветка диагностики не слита, деплой не запускался. Подробности — в STATE.md.
+
 ## Настройка оркестрации — 2026-10-31
 
 Запрос пользователя: добавить конфигурацию Codex и пять специализированных ролей, правила оркестрации и закоммитить изменения. Статус: выполнена настройка и проверка; локальный коммит фиксирует этот результат (hash смотреть в git log).

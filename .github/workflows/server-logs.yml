@@ -45,6 +45,7 @@ jobs:
             # Режим магазина без значений ключей: только тип ключа (live/test) и несекретные настройки чеков.
             awk -F= '
               /^YOOKASSA_SECRET_KEY=/ { split($2, p, "_"); print "YOOKASSA_SECRET_KEY kind", (length($2) ? p[1] : "empty") }
+              /^YOOKASSA_TEST_SECRET_KEY=/ { split($2, p, "_"); print "YOOKASSA_TEST_SECRET_KEY kind", (length($2) ? p[1] : "empty") }
               /^YOOKASSA_(TEST_MODE|RECEIPT_MODE|VAT_CODE|PAYMENT_SUBJECT)=/ { print }
               /^(RESEND_API_KEY|AUTH_MAIL_FROM)=/ { print $1, (length($2) ? "set" : "empty") }
             ' .env

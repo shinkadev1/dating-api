@@ -48,6 +48,14 @@ Worktree `.worktrees/vk-bot-reminders`, от origin/master 21a2a42. Добавл
 
 Worktree `.worktrees/vk-bot-payments-complete`, от `payments` 5c0e1c1. Изменены только `premium_site/` (billing, main, identity, шаблоны, payment.css, тесты), `.env.example`, `premium_site/DEPLOY.md`, `.ai/`. База тестов: 38 passed; после изменений pytest premium_site на Postgres (pgserver): 57 passed, 0 skipped. Схема БД не менялась. Тесты с реальным тестовым магазином ЮKassa не запускались (нет ключей); отказ/неопределённый исход проверены на подставном провайдере и на мок-ответах httpx.
 
+## Production bridge после деплоя 2026-11-01
+
+Коммит `b131430` развёрнут через успешный workflow (https://github.com/shinkadev1/dating-api/actions/runs/41239461193). После деплоя `vk-chat-api` healthy, `vk-engine-bridge` подключил аккаунт `main`; два среза логов не показали новых TLS-таймаутов bridge (https://github.com/shinkadev1/dating-api/actions/runs/41239715848). Реальный пользовательский поиск пары не проверен. Обход ограничивает TLS 1.2 только для клиента chat-engine; причина нарушения TLS 1.3 на сетевом пути не установлена.
+
+## Сетевая диагностика bridge, 2026-11-01
+
+Production: `vk-chat-api` healthy, `vk-engine-bridge` запущен. Мост получает `GET /accounts: ConnectTimeout` и таймаут WebSocket handshake. Последующие проверки из контейнера подтвердили: TLS 1.2 к Cloudflare IP `bots.chatwithyou.site` с SNI проходит; TLS 1.3 к тому же IP/SNI зависает. Публичный `/health` и `www.cloudflare.com` отвечают 200; настройка tunnel и конкретный виновник TLS 1.3 не признаны причиной. Локальный обход в `engine_bridge/app/engine.py` использует TLS 1.2 только для HTTP/WSS клиента chat-engine с проверкой сертификата. Синтаксис, diff check и reviewer PASS; production не обновлён, REST/WSS с новым кодом и пользовательский поиск не проверены. Диагностика в отдельной ветке `diagnose-engine-network` (`61b14a1`), без слияния/деплоя. Логи: https://github.com/shinkadev1/dating-api/actions/runs/41238868466 .
+
 ## Оркестрация Codex, 2026-10-31
 
 Добавлены .codex/config.toml и пять ролей, AGENTS.md дополнен маршрутизацией и workflow. Luna/low — диспетчер и дешёвые роли; Sol/medium — developer; Astra (gpt-6-astra)/high — planner и reviewer (выбор подтверждён пользователем). 42 TOML-файла и 7 конфигураций прошли разбор и строгую проверку установленным CLI; независимый reviewer PASS. Существующие инструкции сохранены. Выполнен mobile typecheck; lint недоступен из-за исходно отсутствующей настройки ESLint. Реальный запуск ролей и смена модели текущего чата не тестировались.

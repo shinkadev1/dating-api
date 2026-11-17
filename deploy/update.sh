@@ -234,12 +234,12 @@ else
 fi
 
 # Страница оплаты (premium_site). Решают только секреты деплоя (окружение и ENV_FILE), не .env сервера:
-# PAYMENTS_ENABLED=true|false, а без него — наличие PREMIUM_LINK_SECRET и YOOKASSA_SHOP_ID.
+# PAYMENTS_ENABLED=true|false, а без него — наличие PREMIUM_LINK_SECRET и YOOKASSA_SHOP_ID (или YOOKASSA_TEST_SHOP_ID).
 case $(deploy_value PAYMENTS_ENABLED | tr '[:upper:]' '[:lower:]') in
   true|1|yes) payments=1 ;;
   false|0|no) payments=0 ;;
   "")
-    if [ -n "$(deploy_value PREMIUM_LINK_SECRET)" ] && [ -n "$(deploy_value YOOKASSA_SHOP_ID)" ]; then
+    if [ -n "$(deploy_value PREMIUM_LINK_SECRET)" ] && { [ -n "$(deploy_value YOOKASSA_SHOP_ID)" ] || [ -n "$(deploy_value YOOKASSA_TEST_SHOP_ID)" ]; }; then
       payments=1
     else
       payments=0
@@ -253,8 +253,28 @@ if [ "$payments" -eq 1 ]; then
   fi
   require_secret PREMIUM_LINK_SECRET
   require_secret PAY_AUTH_SECRET
-  require_secret YOOKASSA_SHOP_ID
-  require_secret YOOKASSA_SECRET_KEY
+  # Пара ключей ЮKassa зависит от YOOKASSA_TEST_MODE (по умолчанию true): тестовая пара, при её отсутствии основная;
+  # при false — только основная, тестовая игнорируется.
+  yk_mode=$(deploy_value YOOKASSA_TEST_MODE | tr '[:upper:]' '[:lower:]')
+  if [ -z "$yk_mode" ]; then
+    yk_mode=$(env_value YOOKASSA_TEST_MODE | tr '[:upper:]' '[:lower:]')
+  fi
+  if [ "${yk_mode:-true}" = "true" ]; then
+    if optional_secret YOOKASSA_TEST_SHOP_ID && optional_secret YOOKASSA_TEST_SECRET_KEY; then
+      optional_secret YOOKASSA_SHOP_ID || true
+      optional_secret YOOKASSA_SECRET_KEY || true
+    else
+      drop_env YOOKASSA_TEST_SHOP_ID
+      drop_env YOOKASSA_TEST_SECRET_KEY
+      require_secret YOOKASSA_SHOP_ID
+      require_secret YOOKASSA_SECRET_KEY
+    fi
+  else
+    require_secret YOOKASSA_SHOP_ID
+    require_secret YOOKASSA_SECRET_KEY
+    optional_secret YOOKASSA_TEST_SHOP_ID || true
+    optional_secret YOOKASSA_TEST_SECRET_KEY || true
+  fi
   ensure_secret PREM_SERVICE_VK_TOKEN
   ensure_secret PREM_SERVICE_TG_TOKEN
   ensure_secret PREM_SERVICE_WEB_TOKEN
@@ -291,7 +311,7 @@ if [ "$payments" -eq 1 ]; then
 else
   echo "Оплата выключена: страница оплаты не запускается, ссылка на оплату отвечает 503."
   # Ключи доступа к оплате убираем из .env, чтобы выключение было настоящим и при ручном запуске.
-  for key in PREMIUM_LINK_SECRET YOOKASSA_SHOP_ID YOOKASSA_SECRET_KEY PAY_AUTH_SECRET RESEND_API_KEY YOOKASSA_WEBHOOK_IPS PREMIUM_FORWARDED_ALLOW_IPS; do
+  for key in PREMIUM_LINK_SECRET YOOKASSA_SHOP_ID YOOKASSA_SECRET_KEY YOOKASSA_TEST_SHOP_ID YOOKASSA_TEST_SECRET_KEY PAY_AUTH_SECRET RESEND_API_KEY YOOKASSA_WEBHOOK_IPS PREMIUM_FORWARDED_ALLOW_IPS; do
     drop_env "$key"
   done
   unset COMPOSE_FILE

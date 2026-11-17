@@ -90,9 +90,16 @@ class ProviderRejected(HTTPException):
     """YooKassa definitively refused to create a payment (HTTP 4xx other than 429): nothing exists on its side."""
     def __init__(self): super().__init__(409,REJECTED_TEXT)  # 4xx: a Cloudflare tunnel may replace 5xx bodies with its own page
 
+def yookassa_credentials():
+    """(shop_id, secret) for the current mode: TEST_MODE=true -> test pair, falling back to the main pair if a test value is missing; false -> main pair."""
+    if os.getenv('YOOKASSA_TEST_MODE','true').strip().lower()=='true':
+        shop=os.getenv('YOOKASSA_TEST_SHOP_ID','').strip(); secret=os.getenv('YOOKASSA_TEST_SECRET_KEY','').strip()
+        if shop and secret: return shop,secret
+    return os.getenv('YOOKASSA_SHOP_ID','').strip(),os.getenv('YOOKASSA_SECRET_KEY','').strip()
+
 class Provider:
     def request(self,method,path,body=None,key=None):
-        shop=os.getenv('YOOKASSA_SHOP_ID',''); secret=os.getenv('YOOKASSA_SECRET_KEY','')
+        shop,secret=yookassa_credentials()
         if not shop or not secret: raise HTTPException(503,'ЮKassa не настроена')
         try:
             response=httpx.request(method,'https://api.yookassa.ru/v3/'+path,auth=(shop,secret),json=body,headers={'Idempotence-Key':str(key)} if key else {},timeout=20)
@@ -109,7 +116,7 @@ class Provider:
             raise HTTPException(503,'Результат оплаты пока неизвестен. Повторите проверку, не создавая новый платёж.') from error
 
     def validate(self,payment,order):
-        if (payment.get('recipient',{}).get('account_id')!=os.getenv('YOOKASSA_SHOP_ID') or
+        if (payment.get('recipient',{}).get('account_id')!=yookassa_credentials()[0] or
             payment.get('test') is not (os.getenv('YOOKASSA_TEST_MODE','true').lower()=='true') or
             payment.get('amount')!={'value':f"{order['amount_rub']}.00",'currency':'RUB'} or
             payment.get('metadata',{}).get('order_id')!=str(order['id']) or
