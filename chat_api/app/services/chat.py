@@ -217,19 +217,22 @@ class ChatService:
                 if idle < min_idle_seconds:
                     return False
                 await repo.set_idle(conn, peer, reason="inactive", ended_by=None)
-                return True
-            partner_activity = await repo.idle_seconds(conn, partner)
-            if partner_activity is not None:
-                idle = min(idle, partner_activity[0])
-                legacy = legacy or partner_activity[1]
-            if idle < min_idle_seconds:
-                return False
-            if not await self._detach(conn, peer, "inactive", outbox, ended, by_service=True):
-                return False
-            # Инициатора диалога тоже уведомляем: при stop он узнаёт итог из HTTP-ответа, здесь ответа нет.
-            outbox.append((peer, ChatEvent(type="partner_left", reason="inactive")))
-            if legacy or idle >= silent_after_seconds:
-                outbox[:] = [(r, ev) for r, ev in outbox if r.is_engine]
+                if peer.is_engine:
+                    # Аккаунт chat-engine освобождается только по partner_left; людям ничего не шлём.
+                    outbox.append((peer, ChatEvent(type="partner_left", reason="inactive")))
+            else:
+                partner_activity = await repo.idle_seconds(conn, partner)
+                if partner_activity is not None:
+                    idle = min(idle, partner_activity[0])
+                    legacy = legacy or partner_activity[1]
+                if idle < min_idle_seconds:
+                    return False
+                if not await self._detach(conn, peer, "inactive", outbox, ended, by_service=True):
+                    return False
+                # Инициатора диалога тоже уведомляем: при stop он узнаёт итог из HTTP-ответа, здесь ответа нет.
+                outbox.append((peer, ChatEvent(type="partner_left", reason="inactive")))
+                if legacy or idle >= silent_after_seconds:
+                    outbox[:] = [(r, ev) for r, ev in outbox if r.is_engine]
         await self._flush(outbox)
         return True
 

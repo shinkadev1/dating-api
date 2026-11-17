@@ -200,6 +200,17 @@ class InactivityDbTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.chat.state(c)).phase, "chatting")
         self.assertEqual(self.events.sent, [])
 
+    async def test_half_broken_engine_peer_gets_partner_left(self) -> None:
+        dialog_id = await self.pair(ENGINE, A, 60)
+        async with self.pool.connection() as conn:
+            await repo.set_searching(conn, A)
+        self.events.sent.clear()
+        self.assertTrue(await self.chat.close_inactive(ENGINE, IDLE, SILENT))
+        self.assertEqual((await self.chat.state(ENGINE)).phase, "idle")
+        self.assertEqual((await self.chat.state(A)).phase, "searching")
+        self.assertEqual([(p, e.type, e.reason) for p, e in self.events.sent], [(ENGINE, "partner_left", "inactive")])
+        self.assertIsNotNone((await self.dialog(dialog_id))["ended_at"])
+
     async def test_not_counted_for_promo(self) -> None:
         await self.pair(A, B, 40)
         await self.sweeper.run_once()
