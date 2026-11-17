@@ -143,7 +143,7 @@ class InactivityDbTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([e for _, e in self.events.sent], [])
         self.assertEqual((await self.chat.state(B)).phase, "idle")
 
-    async def test_null_activity_falls_back_to_updated_at(self) -> None:
+    async def test_legacy_null_activity_closed_silently_any_age(self) -> None:
         dialog_id = await self.pair(A, B, 0)
         async with self.pool.connection() as conn:
             await conn.execute(
@@ -151,6 +151,54 @@ class InactivityDbTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(await self.sweeper.run_once(), 1)
         self.assertEqual((await self.dialog(dialog_id))["end_reason"], "inactive")
+        self.assertEqual(self.events.sent, [])
+
+    async def test_legacy_engine_partner_released(self) -> None:
+        await self.pair(A, ENGINE, 0)
+        async with self.pool.connection() as conn:
+            await conn.execute(
+                "UPDATE chat_sessions SET last_activity_at = NULL, updated_at = NOW() - interval '2 hours'"
+            )
+        self.assertEqual(await self.sweeper.run_once(), 1)
+        self.assertEqual((await self.chat.state(ENGINE)).phase, "idle")
+        self.assertEqual([(p, e.reason) for p, e in self.events.sent], [(ENGINE, "inactive")])
+
+    async def test_fresh_partner_keeps_pair_alive(self) -> None:
+        dialog_id = await self.pair(A, B, 60)
+        async with self.pool.connection() as conn:
+            await conn.execute("UPDATE chat_sessions SET last_activity_at = NOW() WHERE user_id = %s", (B.user_id,))
+        self.assertFalse(await self.chat.close_inactive(A, IDLE, SILENT))
+        self.assertIsNone((await self.dialog(dialog_id))["ended_at"])
+
+    async def test_half_broken_partner_idle_or_searching(self) -> None:
+        dialog_id = await self.pair(A, B, 60)
+        async with self.pool.connection() as conn:
+            await repo.set_searching(conn, B)
+        self.events.sent.clear()
+        self.assertTrue(await self.chat.close_inactive(A, IDLE, SILENT))
+        # Общий диалог закрыл поиск B ("stopped"); сессия A всё ещё chatting и закрывается молча.
+        self.assertIsNotNone((await self.dialog(dialog_id))["ended_at"])
+        self.assertEqual((await self.chat.state(A)).phase, "idle")
+        self.assertEqual((await self.chat.state(B)).phase, "searching")
+        self.assertEqual(self.events.sent, [])
+
+    async def test_half_broken_partner_talks_to_third(self) -> None:
+        c = Peer("vk", "club1", 33)
+        first = await self.pair(A, B, 60)
+        async with self.pool.connection() as conn:
+            await repo.touch_user(conn, c)
+            await repo.set_searching(conn, c)
+            second = await repo.open_dialog(conn, B, c)
+            await repo.set_chatting(conn, B, c, second)
+            await repo.set_chatting(conn, c, B, second)
+        self.events.sent.clear()
+        self.assertTrue(await self.chat.close_inactive(A, IDLE, SILENT))
+        self.assertEqual((await self.dialog(first))["end_reason"], "inactive")
+        self.assertIsNone((await self.dialog(second))["ended_at"])
+        self.assertEqual((await self.chat.state(A)).phase, "idle")
+        self.assertEqual((await self.chat.state(B)).phase, "chatting")
+        self.assertEqual((await self.chat.state(c)).phase, "chatting")
+        self.assertEqual(self.events.sent, [])
 
     async def test_not_counted_for_promo(self) -> None:
         await self.pair(A, B, 40)

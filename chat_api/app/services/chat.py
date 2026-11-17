@@ -198,20 +198,37 @@ class ChatService:
         """Закрывает молчащий диалог peer и его собеседника. False - условие уже не выполняется.
 
         Условие перепроверяется под блокировкой пар: реплика могла прийти после выборки.
-        Если молчат дольше silent_after_seconds (давний бэклог), людям событие не шлём;
-        chat-engine узнаёт всегда, иначе аккаунт останется занятым.
+        Молчание пары - по самой свежей активности обеих сторон. Тихо (людям без событий) закрываются
+        диалоги, начатые до появления last_activity_at, и те, где молчат дольше silent_after_seconds
+        (давний бэклог). chat-engine узнаёт о закрытии связной пары всегда, иначе аккаунт останется занятым.
+        Если пара не связана взаимно (собеседник в поиске, idle или говорит с третьим), закрывается
+        только сессия peer: собеседник и его диалог не затрагиваются.
         """
         outbox: Outbox = []
         ended: list[repo.DialogEnd] = []
         async with self._locked() as conn:
-            idle = await repo.idle_seconds(conn, peer)
-            if idle is None or idle < min_idle_seconds:
+            session = await repo.get_session(conn, peer)
+            activity = await repo.idle_seconds(conn, peer)
+            if session is None or session.phase != "chatting" or activity is None:
+                return False
+            idle, legacy = activity
+            partner = await self._linked_partner(conn, peer, session)
+            if partner is None:
+                if idle < min_idle_seconds:
+                    return False
+                await repo.set_idle(conn, peer, reason="inactive", ended_by=None)
+                return True
+            partner_activity = await repo.idle_seconds(conn, partner)
+            if partner_activity is not None:
+                idle = min(idle, partner_activity[0])
+                legacy = legacy or partner_activity[1]
+            if idle < min_idle_seconds:
                 return False
             if not await self._detach(conn, peer, "inactive", outbox, ended, by_service=True):
                 return False
             # Инициатора диалога тоже уведомляем: при stop он узнаёт итог из HTTP-ответа, здесь ответа нет.
             outbox.append((peer, ChatEvent(type="partner_left", reason="inactive")))
-            if idle >= silent_after_seconds:
+            if legacy or idle >= silent_after_seconds:
                 outbox[:] = [(r, ev) for r, ev in outbox if r.is_engine]
         await self._flush(outbox)
         return True
@@ -364,8 +381,8 @@ class ChatService:
                 raise NotChattingError
             partner = await self._linked_partner(conn, peer, session)
         if partner is not None:
-            await self._events.publish(partner, ChatEvent(type="message", text=text))
             await self._touch(peer, partner)
+            await self._events.publish(partner, ChatEvent(type="message", text=text))
             await self._record(session.dialog_id, peer, partner, kind="text", status="delivered", text=text)
             return MessageOut(delivered=True, phase="chatting")
         outbox: Outbox = []
@@ -435,6 +452,7 @@ class ChatService:
                 if copy_id is None:
                     await self._record(session.dialog_id, peer, partner, status="skipped", **fields)
                     return "locked"
+                await self._touch(peer, partner)
                 await self._events.publish(
                     partner,
                     ChatEvent(
@@ -448,9 +466,9 @@ class ChatService:
                 logger.info(
                     "Размытое фото %s -> %s/%s/%s", copy_id, partner.platform, partner.bot_key, partner.user_id
                 )
-                await self._touch(peer, partner)
                 await self._record(session.dialog_id, peer, partner, status="delivered", **fields)
                 return "sent"
+        await self._touch(peer, partner)
         await self._events.publish(
             partner,
             ChatEvent(
@@ -470,7 +488,6 @@ class ChatService:
             partner.bot_key,
             partner.user_id,
         )
-        await self._touch(peer, partner)
         await self._record(session.dialog_id, peer, partner, status="delivered", **fields)
         return "sent"
 

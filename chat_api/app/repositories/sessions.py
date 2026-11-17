@@ -226,11 +226,12 @@ async def find_inactive(conn: AsyncConnection, min_idle_seconds: float, limit: i
     return [_peer(row) for row in await cursor.fetchall()]
 
 
-async def idle_seconds(conn: AsyncConnection, peer: Peer) -> float | None:
-    """Сколько секунд в диалоге молчат; None — сессия не в диалоге."""
+async def idle_seconds(conn: AsyncConnection, peer: Peer) -> tuple[float, bool] | None:
+    """Сколько секунд в диалоге молчат и начат ли он до появления last_activity_at; None — не в диалоге."""
     cursor = await conn.execute(
         """
-        SELECT EXTRACT(EPOCH FROM NOW() - COALESCE(last_activity_at, updated_at)) AS idle
+        SELECT EXTRACT(EPOCH FROM NOW() - COALESCE(last_activity_at, updated_at)) AS idle,
+               last_activity_at IS NULL AS legacy
         FROM chat_sessions
         WHERE platform = %(platform)s AND bot_key = %(bot_key)s AND user_id = %(user_id)s
           AND phase = 'chatting'
@@ -238,7 +239,7 @@ async def idle_seconds(conn: AsyncConnection, peer: Peer) -> float | None:
         _key(peer),
     )
     row = await cursor.fetchone()
-    return None if row is None else float(row["idle"])
+    return None if row is None else (float(row["idle"]), bool(row["legacy"]))
 
 
 def _peer(row: dict[str, Any]) -> Peer:

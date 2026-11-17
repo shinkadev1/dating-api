@@ -209,7 +209,9 @@ async def engagement(conn: AsyncConnection, platforms: list[str]) -> dict[str, A
         SELECT COUNT(*) AS dialogs_30,
                PERCENTILE_CONT(0.5) WITHIN GROUP (
                    ORDER BY EXTRACT(EPOCH FROM (ended_at - started_at)) / 60
-               ) FILTER (WHERE ended_at IS NOT NULL) AS median_minutes,
+               ) FILTER (
+                   WHERE ended_at IS NOT NULL AND end_reason IS DISTINCT FROM 'inactive'
+               ) AS median_minutes,
                COUNT(*) FILTER (WHERE end_reason = 'reported') AS reported_30
         FROM dialogs
         WHERE (a_platform = ANY(%(p)s) OR b_platform = ANY(%(p)s))

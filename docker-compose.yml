@@ -77,6 +77,9 @@ services:
       STATS_ONLINE_WINDOW_SECONDS: ${STATS_ONLINE_WINDOW_SECONDS:-300}
       # Ежедневная массовая рассылка-промо (vk/tg, 19-21 МСК). Включена; false - выключить.
       DAILY_PROMO_ENABLED: ${DAILY_PROMO_ENABLED:-true}
+      # Автозакрытие молчащих диалогов: через сколько минут (0 - выкл.) и с какого простоя в часах закрывать без уведомления.
+      DIALOG_INACTIVITY_MINUTES: ${DIALOG_INACTIVITY_MINUTES:-30}
+      DIALOG_INACTIVITY_SILENT_HOURS: ${DIALOG_INACTIVITY_SILENT_HOURS:-24}
       # Медиа лежат в Supabase Storage (S3-протокол, бакет chat-media). Другое S3-хранилище можно задать MEDIA_S3_* в .env сервера.
       S3_ENDPOINT_URL: ${MEDIA_S3_ENDPOINT_URL:-http://storage:5000/s3}
       S3_REGION: ${MEDIA_S3_REGION:-local}

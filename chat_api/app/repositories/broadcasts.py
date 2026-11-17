@@ -21,8 +21,9 @@ EVENT_AT: dict[str, str] = {
     "last_seen": "link.last_seen_at",
     "dialog_ended": """(
         SELECT MAX(d.ended_at) FROM dialogs d
-        WHERE (d.a_platform = link.user_platform AND d.a_user_id = link.user_id)
-           OR (d.b_platform = link.user_platform AND d.b_user_id = link.user_id)
+        WHERE ((d.a_platform = link.user_platform AND d.a_user_id = link.user_id)
+           OR (d.b_platform = link.user_platform AND d.b_user_id = link.user_id))
+          AND d.end_reason IS DISTINCT FROM 'inactive'
     )""",
     "premium_ended": "CASE WHEN bu.premium_until <= %(now)s THEN bu.premium_until END",
 }

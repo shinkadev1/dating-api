@@ -228,6 +228,21 @@ class BroadcastDbTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.service.run_once(), 2)
         self.assertEqual(sorted((u, t) for _, _, u, t in self.bus.sent), [(1, "premium"), (2, "dialog")])
 
+    async def test_dialog_ended_ignores_inactive_dialogs(self):
+        vk = await self.channel()
+        await self.create(text="dialog", platforms=["vk"], kind="event", event="dialog_ended", delay_minutes=10)
+        await self.sql("UPDATE broadcasts SET active_since = %s", (NOW - timedelta(days=5),))
+        await self.user(vk, 1)
+        await self.user(vk, 2)
+        for uid, reason in ((1, "inactive"), (2, "stopped")):
+            await self.sql(
+                "INSERT INTO dialogs (a_platform, a_bot_key, a_user_id, b_platform, b_bot_key, b_user_id, "
+                "ended_at, end_reason) VALUES ('vk', '-100', %s, 'vk', '-100', 99, %s, %s)",
+                (uid, NOW - timedelta(minutes=20), reason),
+            )
+        self.assertEqual(await self.service.run_once(), 1)
+        self.assertEqual([(u, t) for _, _, u, t in self.bus.sent], [(2, "dialog")])
+
     async def test_paused_event_does_not_send(self):
         vk = await self.channel()
         b = await self.create(text="x", platforms=["vk"], kind="event", event="last_seen", delay_minutes=0)

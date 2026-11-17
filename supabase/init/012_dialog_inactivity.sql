@@ -17,10 +17,15 @@ BEGIN
     IF old_name IS NOT NULL THEN
         EXECUTE format('ALTER TABLE dialogs DROP CONSTRAINT %I', old_name);
         ALTER TABLE dialogs ADD CONSTRAINT dialogs_end_reason_check
-            CHECK (end_reason IN ('stopped', 'reported', 'undeliverable', 'inactive'));
+            CHECK (end_reason IN ('stopped', 'reported', 'undeliverable', 'inactive')) NOT VALID;
+        ALTER TABLE dialogs VALIDATE CONSTRAINT dialogs_end_reason_check;
     END IF;
 END
 $$;
+
+-- Выборка молчащих диалогов (то же выражение, что в repositories/sessions.py find_inactive).
+CREATE INDEX IF NOT EXISTS chat_sessions_chatting_activity_idx
+    ON chat_sessions ((COALESCE(last_activity_at, updated_at))) WHERE phase = 'chatting';
 
 COMMENT ON COLUMN chat_sessions.last_activity_at IS 'Последняя реплика пары или её старт; NULL — до появления колонки (тогда updated_at).';
 
