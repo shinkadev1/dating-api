@@ -2,7 +2,7 @@ name: Daily report
 
 on:
   schedule:
-    - cron: "5 21 * * *" # 00:05 по Москве: отчёт за прошедшие сутки
+    - cron: "0 8 * * *" # 11:00 по Москве: отчёт за вчера
   workflow_dispatch:
     inputs:
       day:
@@ -46,3 +46,26 @@ jobs:
               < deploy/daily-report.sh | tee report.txt
           { echo '```'; cat report.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           rm -f ~/.ssh/deploy_key
+          sed -n '/^TG_REPORT_BEGIN$/,/^TG_REPORT_END$/{//!p}' report.txt > tg-message.txt
+          test -s tg-message.txt || { echo "TG message is empty" >&2; exit 1; }
+
+      - name: Send to Telegram
+        env:
+          TG_TOKEN: ${{ secrets.REPORT_TG_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.REPORT_TG_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          curl -sS --fail-with-body -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage"             --data-urlencode "chat_id=${TG_CHAT}"             --data-urlencode "text@tg-message.txt" -o /dev/null
+          echo "Отправлено"
+
+      - name: Notify about failure
+        if: failure()
+        env:
+          TG_TOKEN: ${{ secrets.REPORT_TG_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.REPORT_TG_CHAT_ID }}
+          DAY: ${{ inputs.day }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          D="${DAY:-$(TZ=Europe/Moscow date -d yesterday +%Y-%m-%d)}"
+          D="$(date -d "$D" +%d.%m.%Y)"
+          curl -sS -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage"             --data-urlencode "chat_id=${TG_CHAT}"             --data-urlencode "text=⚠ Отчёт за ${D} не собран, см. ${RUN_URL}" -o /dev/null || true

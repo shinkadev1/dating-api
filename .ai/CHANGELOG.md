@@ -1,5 +1,9 @@
 # История важных изменений
 
+## 2026-11-17 — ежедневный отчёт в Telegram (ветка `loop/daily-report-telegram`)
+
+`daily-report.yml` в 11:00 МСК: `deploy/daily-report.sh` считает новых, диалоги и активных за вчера с дельтой к пред. дню, шаг workflow шлёт текст между маркерами TG_REPORT_* через секреты `REPORT_TG_BOT_TOKEN`/`REPORT_TG_CHAT_ID`.
+
 ## 2026-11-14 — ежедневная рассылка чередует экраны (задача 59046)
 
 Чётный день МСК от 14.11.2026 — `daily_hello` («Привет»), нечётный — `daily_promo`. `DAILY_PROMO_ROTATION`/`daily_promo_for` в `broadcasts/settings.py`.
