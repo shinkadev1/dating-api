@@ -43,7 +43,7 @@ class WebAccountTests(unittest.TestCase):
             c.execute('CREATE SCHEMA ' + self.schema)
         self.connection_patch = patch.object(billing, 'connect', lambda: psycopg.connect(self.dsn, autocommit=True, row_factory=dict_row, options='-c search_path=' + self.schema))
         self.connection_patch.start()
-        self.env = patch.dict(os.environ, {'YOOKASSA_SHOP_ID': 'shop', 'YOOKASSA_TEST_MODE': 'true', 'YOOKASSA_RECEIPT_MODE': 'exempt',
+        self.env = patch.dict(os.environ, {'YOOKASSA_SHOP_ID': 'shop', 'YOOKASSA_TEST_SHOP_ID': '', 'YOOKASSA_TEST_SECRET_KEY': '', 'YOOKASSA_TEST_MODE': 'true', 'YOOKASSA_RECEIPT_MODE': 'exempt',
                                            'CHAT_API_APP_TOKEN': APP_TOKEN, 'PREM_SERVICE_WEB_TOKEN': WEB_TOKEN, 'PREM_SERVICE_VK_TOKEN': 'v' * 32})
         self.env.start()
         billing.schema()

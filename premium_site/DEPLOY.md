@@ -104,7 +104,7 @@ PAY_AUTH_SECRET=<случайные 48+ символов>
 
 ## 8. Боевые ключи
 
-В ENV_FILE держите боевые `YOOKASSA_SHOP_ID` и `YOOKASSA_SECRET_KEY` рядом с тестовыми `YOOKASSA_TEST_SHOP_ID`, `YOOKASSA_TEST_SECRET_KEY`. Переключение режима — смена одной строки `YOOKASSA_TEST_MODE` (`true`/`false`), затем `gh secret set ENV_FILE` и Actions → Deploy → Re-run. В боевом магазине настройте те же HTTP-уведомления и кассу. Перезапустите последний деплой (Actions → Deploy → Re-run) и проведите одну реальную оплату минимального тарифа.
+В ENV_FILE держите боевые `YOOKASSA_SHOP_ID` и `YOOKASSA_SECRET_KEY` рядом с тестовыми `YOOKASSA_TEST_SHOP_ID`, `YOOKASSA_TEST_SECRET_KEY`. Переключение режима — смена одной строки `YOOKASSA_TEST_MODE` (`true`/`false`), затем `gh secret set ENV_FILE` и Actions → Deploy → Re-run. Переключайте режим, когда нет незавершённых оплат: заказы, созданные в другом магазине, после переключения не подтвердятся. В боевом магазине настройте те же HTTP-уведомления и кассу. Перезапустите последний деплой (Actions → Deploy → Re-run) и проведите одну реальную оплату минимального тарифа.
 
 ## 9. Откат
 

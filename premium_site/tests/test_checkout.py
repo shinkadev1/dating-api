@@ -39,7 +39,7 @@ class CheckoutTests(unittest.TestCase):
         self.base = os.environ['TEST_DATABASE_URL']; self.schema = 'checkout_' + uuid4().hex
         with psycopg.connect(self.base, autocommit=True) as c: c.execute('CREATE SCHEMA ' + self.schema)
         self.env = patch.dict(os.environ, {'DATABASE_URL': make_conninfo(self.base, options='-c search_path=' + self.schema), 'PAY_AUTH_SECRET': 's' * 32, 'PAY_PUBLIC_URL': 'http://testserver', 'PAY_SECURE_COOKIE': 'false',
-                                           'YOOKASSA_SHOP_ID': 'shop', 'YOOKASSA_SECRET_KEY': 'k', 'YOOKASSA_TEST_MODE': 'true', 'YOOKASSA_RECEIPT_MODE': 'exempt'})
+                                           'YOOKASSA_SHOP_ID': 'shop', 'YOOKASSA_SECRET_KEY': 'k', 'YOOKASSA_TEST_SHOP_ID': '', 'YOOKASSA_TEST_SECRET_KEY': '', 'YOOKASSA_TEST_MODE': 'true', 'YOOKASSA_RECEIPT_MODE': 'exempt'})
         self.env.start(); billing.schema(); identity.schema()
         self.psp = FakeYooKassa()
         self.patch = patch.object(billing.Provider, 'request', lambda provider, *a, **k: self.psp(provider, *a, **k)); self.patch.start()

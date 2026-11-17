@@ -18,7 +18,7 @@ class ProviderTests(unittest.TestCase):
     def test_rejects_cross_shop_mode_amount_and_order(self):
         order={'id':uuid4(),'amount_rub':1,'payment_id':'payment'}
         original={'id':'payment','recipient':{'account_id':'shop'},'test':True,'amount':{'value':'1.00','currency':'RUB'},'metadata':{'order_id':str(order['id'])}}
-        with patch.dict(os.environ,{'YOOKASSA_SHOP_ID':'shop','YOOKASSA_TEST_MODE':'true'}):
+        with patch.dict(os.environ,{'YOOKASSA_SHOP_ID':'shop','YOOKASSA_TEST_MODE':'true','YOOKASSA_TEST_SHOP_ID':'','YOOKASSA_TEST_SECRET_KEY':''}):
             billing.Provider().validate(original,order)
             for key,value in [('id','other'),('recipient',{'account_id':'other'}),('test',False),('amount',{'value':'0.01','currency':'RUB'}),('metadata',{'order_id':str(uuid4())})]:
                 with self.subTest(key=key),self.assertRaises(HTTPException): billing.Provider().validate(original|{key:value},order)
@@ -74,7 +74,7 @@ class CredentialsTests(unittest.TestCase):
 
 class ProviderErrorTests(unittest.TestCase):
     def call(self,status,method='POST',body=None):
-        with patch.dict(os.environ,{'YOOKASSA_SHOP_ID':'shop','YOOKASSA_SECRET_KEY':'secret-value'}),patch.object(billing.httpx,'request',return_value=FakeResponse(status,body)):
+        with patch.dict(os.environ,{'YOOKASSA_SHOP_ID':'shop','YOOKASSA_SECRET_KEY':'secret-value','YOOKASSA_TEST_SHOP_ID':'','YOOKASSA_TEST_SECRET_KEY':''}),patch.object(billing.httpx,'request',return_value=FakeResponse(status,body)):
             return billing.Provider().request(method,'payments',{'amount':1},'key')
 
     def test_confirmed_refusals_are_rejected_without_leaking_details(self):
@@ -90,7 +90,7 @@ class ProviderErrorTests(unittest.TestCase):
             with self.subTest(status=status),self.assertRaises(HTTPException) as caught:
                 self.call(status)
             self.assertEqual(caught.exception.status_code,503);self.assertNotIsInstance(caught.exception,billing.ProviderRejected)
-        with patch.dict(os.environ,{'YOOKASSA_SHOP_ID':'shop','YOOKASSA_SECRET_KEY':'k'}),patch.object(billing.httpx,'request',side_effect=httpx.ConnectError('down')):
+        with patch.dict(os.environ,{'YOOKASSA_SHOP_ID':'shop','YOOKASSA_SECRET_KEY':'k','YOOKASSA_TEST_SHOP_ID':'','YOOKASSA_TEST_SECRET_KEY':''}),patch.object(billing.httpx,'request',side_effect=httpx.ConnectError('down')):
             with self.assertRaises(HTTPException) as caught: billing.Provider().request('POST','payments',{},'key')
         self.assertEqual(caught.exception.status_code,503)
         with self.assertRaises(HTTPException) as caught: self.call(404,method='GET')
@@ -120,7 +120,7 @@ class PostgresTests(unittest.TestCase):
         with psycopg.connect(self.dsn,autocommit=True) as c: c.execute('CREATE SCHEMA '+self.schema)
         self.connection_patch=patch.object(billing,'connect',lambda:psycopg.connect(self.dsn,autocommit=True,row_factory=dict_row,options='-c search_path='+self.schema))
         self.connection_patch.start()
-        self.env=patch.dict(os.environ,{'YOOKASSA_SHOP_ID':'shop','YOOKASSA_TEST_MODE':'true','YOOKASSA_RECEIPT_MODE':'exempt'})
+        self.env=patch.dict(os.environ,{'YOOKASSA_SHOP_ID':'shop','YOOKASSA_TEST_MODE':'true','YOOKASSA_RECEIPT_MODE':'exempt','YOOKASSA_TEST_SHOP_ID':'','YOOKASSA_TEST_SECRET_KEY':''})
         self.env.start()
         billing.schema();billing.schema()
         self.account=uuid4();self.provider=FakeProvider()
