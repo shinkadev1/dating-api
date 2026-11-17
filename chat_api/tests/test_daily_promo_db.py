@@ -222,7 +222,7 @@ class DailyPromoDbTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_screen_alternates_by_msk_day(self):
         await self.link(await self.channel(), 1)
-        for day, screen in ((14, "daily_hello"), (15, "daily_promo"), (16, "daily_hello"), (13, "daily_promo")):
+        for day, screen in ((17, "daily_anya"), (18, "daily_hello"), (19, "daily_promo"), (20, "daily_anya")):
             self.bus.calls.clear()
             self.now = datetime(2026, 11, day, 20, 30, tzinfo=MSK)
             self.assertEqual(await self.service().run_once(), 1, day)

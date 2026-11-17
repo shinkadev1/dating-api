@@ -23,6 +23,7 @@ DAILY_PROMO_PLATFORMS = ("vk", "tg")
 # день DAILY_PROMO_ROTATION_START — первый вариант, следующий — второй и т.д. по кругу.
 DAILY_PROMO_ROTATION_START = date(2026, 11, 14)
 DAILY_PROMO_ROTATION = (
+    ("daily_anya", "⚡️ Тебе хочет написать Аня, 26..."),
     ("daily_hello", "Давай начнем с простого «Привет» и посмотрим, куда это нас приведет ☕✨"),
     ("daily_promo", "😏👇 В пошлом чате горячо, оценишь?"),
 )
