@@ -275,6 +275,9 @@ class Bridge:
             self.request_reconcile()
         elif link.state == "chatting" and phase == "searching":
             await self._on_state(link, "chatting")
+        elif link.mode == "any" and link.state == "searching" and link.hunt_mode is None:
+            # Мост перезапущен: режим поиска any-аккаунта неизвестен. Сбрасываем, reconcile запустит заново.
+            await self._stop_engine(link)
         elif link.state != phase:
             await self._stop_engine(link)
 
@@ -414,28 +417,38 @@ class Bridge:
     async def _reconcile(self) -> None:
         """Число ищущих аккаунтов подгоняется под число людей, которым не нашлось живой пары."""
         demand = await self._chat_api.demand()
+        needs: dict[str, int] = {}
         for mode in ("normal", "adult"):
             # Спрос и аккаунты считаются отдельно по режимам: adult-аккаунт не закрывает спрос normal.
             part = demand.for_mode(mode)
-            need = part.waiting - part.hunting
-            if need > 0:
-                now = asyncio.get_running_loop().time()
-                candidates = [
+            needs[mode] = part.waiting - part.hunting
+            if needs[mode] < 0:
+                searching = [
                     link
                     for link in self._links.values()
-                    if link.mode in (mode, "any") and link.state == "idle" and link.cooldown_until <= now
+                    if self._search_mode(link) == mode and link.state == "searching"
                 ]
-                # Свободный any-аккаунт берётся для режима, который обработан первым; повторно idle не будет.
-                candidates.sort(key=lambda link: link.mode == "any")  # сначала выделенные аккаунты режима
-                for link in candidates[:need]:
-                    await self._start_hunt(link, mode)
-            elif need < 0:
-                searching = [link for link in self._links.values() if self._search_mode(link) == mode and link.state == "searching"]
-                for link in searching[:-need]:
+                for link in searching[: -needs[mode]]:
                     async with link.lock:
                         if link.state == "searching":
                             logger.info("Аккаунт %s больше не нужен, поиск отменён", link.id)
                             await self._stop_engine(link)
+        now = asyncio.get_running_loop().time()
+
+        def free(link: AccountLink, mode: str) -> bool:
+            return link.mode == mode and link.state == "idle" and link.cooldown_until <= now
+
+        # Сначала выделенные аккаунты своих режимов, затем any — туда, где спрос остался больше (при равенстве normal).
+        for mode in ("normal", "adult"):
+            for link in [x for x in self._links.values() if free(x, mode)][: max(needs[mode], 0)]:
+                await self._start_hunt(link, mode)
+                needs[mode] -= 1
+        for link in [x for x in self._links.values() if free(x, "any")]:
+            mode = "adult" if needs["adult"] > needs["normal"] else "normal"
+            if needs[mode] <= 0:
+                break
+            await self._start_hunt(link, mode)
+            needs[mode] -= 1
 
     @staticmethod
     def _search_mode(link: AccountLink) -> str:

@@ -249,6 +249,29 @@ class BridgeModeTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([_mode("any"), _mode("adult"), _mode("x"), _mode(None)], ["any", "adult", "normal", "normal"])
 
+    async def test_any_goes_where_dedicated_is_missing(self) -> None:
+        chat_api = FakeChatApi(waiting=2, modes={"normal": ModeDemand(1, 0), "adult": ModeDemand(1, 0)})
+        bridge = make_bridge(
+            chat_api, FakeEngine(), {"ad": "idle", "any1": "idle"}, {"ad": "adult", "any1": "any"}
+        )
+        await bridge._reconcile()
+        self.assertEqual(sorted(chat_api.modes.items()), [("ad", "adult"), ("any1", "normal")])
+
+    async def test_any_accounts_follow_larger_need(self) -> None:
+        chat_api = FakeChatApi(waiting=3, modes={"normal": ModeDemand(1, 0), "adult": ModeDemand(2, 0)})
+        bridge = make_bridge(
+            chat_api, FakeEngine(), {"a1": "idle", "a2": "idle"}, {"a1": "any", "a2": "any"}
+        )
+        await bridge._reconcile()
+        self.assertEqual(chat_api.modes, {"a1": "adult", "a2": "normal"})
+
+    async def test_sync_resets_any_search_without_hunt_mode(self) -> None:
+        chat_api, engine = FakeChatApi(), FakeEngine()
+        bridge = make_bridge(chat_api, engine, {"spec1": "searching"}, {"spec1": "any"})
+        chat_api._phase = "searching"
+        await bridge._sync(bridge._links["spec1"])
+        self.assertEqual(engine.calls, [("stop", "spec1")])
+
     async def test_old_chat_api_without_modes_is_normal(self) -> None:
         chat_api = FakeChatApi(waiting=1)
         engine = FakeEngine()
