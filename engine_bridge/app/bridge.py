@@ -93,6 +93,8 @@ class AccountLink:
     closing: bool = False
     # Момент (loop.time()), до которого аккаунт не берём в поиск после 409.
     cooldown_until: float = 0.0
+    # Chat API хранит последнюю ошибку аккаунта (409, лимит); после успешного старта её нужно очистить.
+    error_reported: bool = False
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task[None] | None = None
 
@@ -214,6 +216,8 @@ class Bridge:
             if previous == "limited" and state == "idle":
                 # Лимит закончился: аккаунт снова свободен, диалога у него не было.
                 link.closing = False
+                # Мост мог перезапуститься в лимите: ошибка в Chat API осталась, флаг error_reported сброшен.
+                await self._report_status(link, clear=True, force=True)
                 self.request_reconcile()
                 return
             if state != previous:
@@ -270,6 +274,7 @@ class Bridge:
                 link.closing = False
             self.request_reconcile()
         elif link.state == "limited":
+            await self._report_status(link, error="limited")
             if phase != "idle":
                 await self._stop_human_side(link)
             self.request_reconcile()
@@ -309,6 +314,7 @@ class Bridge:
         link.closing = False
         link.state = "limited"
         logger.warning("Аккаунт %s в лимите chat-engine, снимаю поиск и ищу другой аккаунт", link.id)
+        await self._report_status(link, error="limited")
         await self._stop_human_side(link)
         self.request_reconcile()
 
@@ -386,6 +392,24 @@ class Bridge:
         except EngineError as exc:
             logger.warning("chat-engine не принял реплику для %s: %s", link.id, exc)
             await self._stop_human_side(link)
+
+    async def _report_status(
+        self, link: AccountLink, *, error: str | None = None, clear: bool = False, force: bool = False
+    ) -> None:
+        """Сообщает Chat API режим и ошибку аккаунта. Сбой отправки (в т.ч. 404 старого Chat API) мост не ломает."""
+        if error is None and clear and not (link.error_reported or force):
+            return
+        try:
+            stored = await self._chat_api.status(link.id, link.mode, error=error, clear=clear)
+        except Exception as exc:  # noqa: BLE001 — журнал инцидентов не должен мешать поиску
+            logger.warning("Не передал статус аккаунта %s: %s: %s", link.id, type(exc).__name__, exc)
+            return
+        if not stored:
+            return  # старый Chat API без маршрута: ничего не сохранено
+        if error is not None:
+            link.error_reported = True
+        elif clear:
+            link.error_reported = False
 
     async def _stop_engine(self, link: AccountLink) -> None:
         """Закрывает поиск или разговор в chat-engine. Событие idle затем закроет сторону человека."""
@@ -478,12 +502,15 @@ class Bridge:
                 )
                 await self._stop_human_side(link)
                 link.cooldown_until = asyncio.get_running_loop().time() + _CONFLICT_COOLDOWN_SECONDS
+                await self._report_status(link, error=f"409 cooldown {_CONFLICT_COOLDOWN_SECONDS:.0f}s: {exc}"[:300])
                 self.request_reconcile()
                 return
             except EngineError as exc:
                 logger.warning("chat-engine не начал поиск для %s: %s", link.id, exc)
                 await self._stop_human_side(link)
+                await self._report_status(link, error=f"start failed: {exc}"[:300])
                 return
+            await self._report_status(link, clear=True)
             link.closing = False
             link.hunt_mode = hunt_mode
             link.state = "searching"
@@ -498,4 +525,6 @@ class Bridge:
                     await self._chat_api.visit(link.id)
                 except ChatApiError as exc:
                     logger.warning("Не отметил визит аккаунта %s: %s", link.id, exc)
+                # Режим аккаунта для журнала инцидентов: Chat API мог перезапуститься и забыть его.
+                await self._report_status(link)
             await asyncio.sleep(self._heartbeat)

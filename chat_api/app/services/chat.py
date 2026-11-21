@@ -6,7 +6,8 @@ import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from uuid import UUID
 
 from psycopg import AsyncConnection
@@ -15,9 +16,11 @@ from psycopg_pool import AsyncConnectionPool
 from app.config import Settings
 from app.events import EventBus
 from app.peer import Peer
+from app.repositories import incidents as incidents_repo
 from app.repositories import messages as messages_repo
 from app.repositories import sessions as repo
 from app.repositories.visitors import save_web_visitor
+from app.services import incidents as incidents_logic
 from app.schemas import (
     ChatEvent,
     MediaKind,
@@ -59,6 +62,16 @@ def _promo_due(count: int) -> bool:
 
 
 ADULT_NEEDS_PREMIUM = "Пошлый чат доступен только с премиумом"
+
+
+@dataclass(frozen=True)
+class ClosedSearch:
+    """Поиск человека, закрытый без пары: основа записи в журнал инцидентов."""
+
+    peer: Peer
+    mode: str
+    searching_since: datetime | None
+    outcome: str  # stopped | mode_changed
 
 
 class AdultNeedsPremiumError(Exception):
@@ -177,8 +190,14 @@ class ChatService:
         ended: list[repo.DialogEnd],
         *,
         by_service: bool = False,
+        searches: list[ClosedSearch] | None = None,
+        incident: str | None = None,
+        new_mode: str | None = None,
     ) -> bool:
         """Снимает пользователя с поиска или диалога. True, если было что снимать.
+
+        searches и incident: если человек был именно в поиске (не в диалоге), туда добавляется ClosedSearch
+        с исходом incident. При incident="mode_changed" повторный поиск в том же режиме new_mode — не инцидент.
 
         by_service - диалог закрыл сервис (автозакрытие): ended_by в истории остаётся NULL.
 
@@ -189,6 +208,14 @@ class ChatService:
         if session is None or session.phase == "idle":
             return False
         partner = session.partner if session.phase == "chatting" else None
+        if (
+            searches is not None
+            and incident is not None
+            and session.phase == "searching"
+            and not peer.is_engine
+            and (incident != "mode_changed" or session.mode != new_mode)
+        ):
+            searches.append(ClosedSearch(peer, session.mode, session.searching_since, incident))
         ended.extend(await repo.set_idle(conn, peer, reason=reason, ended_by=None if by_service else peer) or ())
         if partner is not None:
             await self._notify_left(conn, partner, reason, outbox, ended, skip=peer, by_service=by_service)
@@ -247,8 +274,11 @@ class ChatService:
     async def _search(self, peer: Peer, left_reason: LeftReason, mode: str = "normal") -> StateOut:
         outbox: Outbox = []
         ended: list[repo.DialogEnd] = []
+        searches: list[ClosedSearch] = []
         async with self._locked() as conn:
-            await self._detach(conn, peer, left_reason, outbox, ended)
+            await self._detach(
+                conn, peer, left_reason, outbox, ended, searches=searches, incident="mode_changed", new_mode=mode
+            )
             ended.extend(await repo.set_searching(conn, peer, mode) or ())
             await repo.record_search(conn, peer)
             phase: Phase = "searching"
@@ -270,6 +300,7 @@ class ChatService:
                 phase = "chatting"
             self._mark_promo(outbox, await self._promo_targets(conn, ended, self._left_recipients(outbox)))
         await self._flush(outbox)
+        await self._record_incidents(searches)
         if phase == "searching" and self._engine_enabled:
             await self._events.request_engine()
         return StateOut(phase=phase)
@@ -369,11 +400,13 @@ class ChatService:
     async def stop(self, peer: Peer) -> StopOut:
         outbox: Outbox = []
         ended: list[repo.DialogEnd] = []
+        searches: list[ClosedSearch] = []
         async with self._locked() as conn:
-            was_active = await self._detach(conn, peer, "stopped", outbox, ended)
+            was_active = await self._detach(conn, peer, "stopped", outbox, ended, searches=searches, incident="stopped")
             targets = await self._promo_targets(conn, ended, self._left_recipients(outbox) | {peer})
             self._mark_promo(outbox, targets)
         await self._flush(outbox)
+        await self._record_incidents(searches)
         return StopOut(was_active=was_active, promo=peer in targets)
 
     async def send_message(self, peer: Peer, text: str) -> MessageOut:
@@ -518,9 +551,57 @@ class ChatService:
         async with self._locked() as conn:
             await self._detach(conn, engine, "stopped", outbox, ended)
             ended.extend(await repo.set_searching(conn, engine, mode) or ())
+            await incidents_repo.mark_engine_hunt(conn, engine.bot_key, mode)
             self._mark_promo(outbox, await self._promo_targets(conn, ended, self._left_recipients(outbox)))
         await self._flush(outbox)
         return StateOut(phase="searching")
+
+    async def engine_status(self, engine: Peer, mode: str | None, error: str | None, error_given: bool) -> None:
+        """Мост сообщает режим аккаунта и последнюю ошибку (409, лимит). error=None при error_given очищает."""
+        async with self._pool.connection() as conn:
+            await incidents_repo.set_engine_status(
+                conn, engine.bot_key, mode=mode, error=error, error_given=error_given
+            )
+
+    async def _record_incidents(self, searches: list[ClosedSearch]) -> None:
+        """Пишет журнал инцидентов после коммита стопа. Любой сбой только логируется: стоп уже выполнен."""
+        for closed in searches:
+            try:
+                await self._record_incident(closed)
+            except Exception as exc:  # noqa: BLE001 — журнал не должен ломать стоп
+                logger.warning("Не записал инцидент поиска: %s: %s", type(exc).__name__, exc)
+
+    async def _record_incident(self, closed: ClosedSearch) -> None:
+        now = datetime.now(timezone.utc)
+        since = closed.searching_since
+        wait = max(0, int((now - since).total_seconds())) if since is not None else 0
+        async with self._pool.connection() as conn:
+            if wait < incidents_logic.QUICK_LEAVE_SECONDS:
+                # Быстрый выход: снимок не собираем, чтобы не нагружать базу лишними запросами.
+                accounts: list[incidents_logic.AccountInfo] = []
+                snapshot = None
+            else:
+                rows = await incidents_repo.engine_accounts(conn, incidents_logic.PRESENCE_WINDOW_SECONDS)
+                accounts = [incidents_logic.account_from_row(row) for row in rows]
+                snapshot = incidents_logic.build_snapshot(accounts, await incidents_repo.queue_by_mode(conn))
+            reason = incidents_logic.classify_incident(
+                wait_seconds=wait,
+                mode=closed.mode,
+                searching_since=since,
+                accounts=accounts,
+                now=now,
+            )
+            await incidents_repo.insert_incident(
+                conn,
+                closed.peer,
+                mode=closed.mode,
+                searching_since=since,
+                ended_at=now,
+                wait_seconds=wait,
+                outcome=closed.outcome,
+                reason=reason,
+                snapshot=snapshot,
+            )
 
     async def engine_attach(self, engine: Peer) -> EngineAttachOut:
         """chat-engine нашёл собеседника: отдаёт его человеку, который ждёт дольше всех.

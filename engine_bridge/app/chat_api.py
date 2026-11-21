@@ -15,6 +15,10 @@ class ChatApiError(Exception):
     """API недоступен или ответил ошибкой."""
 
 
+class NotFoundError(ChatApiError):
+    """404: старый Chat API без нового маршрута."""
+
+
 class NotChattingError(ChatApiError):
     """У аккаунта уже нет активного диалога."""
 
@@ -56,6 +60,8 @@ class ChatApiClient:
             raise ChatApiError(f"{method} {path}: {type(exc).__name__}: {exc}") from exc
         if response.status_code == httpx.codes.CONFLICT:
             raise NotChattingError(response.text)
+        if response.status_code == httpx.codes.NOT_FOUND:
+            raise NotFoundError(f"{method} {path}: HTTP 404 {response.text}")
         if response.is_error:
             raise ChatApiError(f"{method} {path}: HTTP {response.status_code} {response.text}")
         if response.status_code == httpx.codes.NO_CONTENT:
@@ -131,6 +137,25 @@ class ChatApiClient:
 
     async def hunt(self, account: str, mode: str = "normal") -> None:
         await self._request("POST", f"/engine/{account}/hunt", {"mode": mode})
+
+    async def status(self, account: str, mode: str | None = None, *, error: str | None = None, clear: bool = False) -> bool:
+        """Сообщает Chat API режим аккаунта и последнюю ошибку (для журнала инцидентов поиска).
+
+        error — записать ошибку, clear — очистить, иначе ошибка не меняется. False, если Chat API
+        старый и маршрута нет (404): это не сбой, мост работает как раньше.
+        """
+        body: dict[str, str | None] = {}
+        if mode:
+            body["mode"] = mode
+        if error is not None:
+            body["error"] = error
+        elif clear:
+            body["error"] = None
+        try:
+            await self._request("POST", f"/engine/{account}/status", body)
+        except NotFoundError:
+            return False
+        return True
 
     async def attach(self, account: str) -> bool:
         """True, если найденный собеседник отдан ждущему человеку."""

@@ -19,6 +19,7 @@ class SessionRow:
     partner: Peer | None
     dialog_id: int | None = None
     mode: str = "normal"
+    searching_since: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,7 @@ async def lock_matchmaking(conn: AsyncConnection) -> None:
 async def get_session(conn: AsyncConnection, peer: Peer) -> SessionRow | None:
     cursor = await conn.execute(
         """
-        SELECT phase, partner_id, partner_platform, partner_bot_key, dialog_id, mode
+        SELECT phase, partner_id, partner_platform, partner_bot_key, dialog_id, mode, searching_since
         FROM chat_sessions
         WHERE platform = %(platform)s AND bot_key = %(bot_key)s AND user_id = %(user_id)s
         """,
@@ -57,7 +58,13 @@ async def get_session(conn: AsyncConnection, peer: Peer) -> SessionRow | None:
             row["partner_bot_key"] or "",
             int(row["partner_id"]),
         )
-    return SessionRow(phase=row["phase"], partner=partner, dialog_id=row["dialog_id"], mode=row["mode"])
+    return SessionRow(
+        phase=row["phase"],
+        partner=partner,
+        dialog_id=row["dialog_id"],
+        mode=row["mode"],
+        searching_since=row["searching_since"],
+    )
 
 
 async def open_dialog(conn: AsyncConnection, a: Peer, b: Peer) -> int:

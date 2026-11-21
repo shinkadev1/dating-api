@@ -102,6 +102,13 @@ class Repo:
         self.calls.append(("chatting", peer, partner, dialog_id))
 
 
+class NoIncidents:
+    """Журнал инцидентов и присутствие аккаунтов тут не проверяются."""
+
+    async def mark_engine_hunt(self, conn: object, bot_key: str, mode: str) -> None:
+        pass
+
+
 class Recorder:
     def __init__(self, fail: bool = False) -> None:
         self.rows: list[dict] = []
@@ -137,6 +144,7 @@ async def run_with(repo: Repo, rec: Recorder, call):  # type: ignore[no-untyped-
     with (
         patch.object(chat_module, "repo", repo),
         patch.object(chat_module, "messages_repo", rec),
+        patch.object(chat_module, "incidents_repo", NoIncidents()),
     ):
         result = await call(service)
     return result, events

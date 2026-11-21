@@ -19,6 +19,13 @@ class SearchIn(BaseModel):
     mode: ChatMode = Field(default="normal", description="`normal` или `adult` («Пошлый чат», только с премиумом)")
 
 
+class EngineStatusIn(BaseModel):
+    """Состояние аккаунта chat-engine от моста. Без `error` ошибка не меняется, `error: null` очищает её."""
+
+    mode: Literal["normal", "adult", "any"] | None = Field(default=None, description="Режим аккаунта в chat-engine")
+    error: str | None = Field(default=None, max_length=300, description="Последняя ошибка: 409, limited, пауза")
+
+
 class StateOut(BaseModel):
     phase: Phase = Field(description="`idle` — вне чата, `searching` — в очереди, `chatting` — в диалоге")
 

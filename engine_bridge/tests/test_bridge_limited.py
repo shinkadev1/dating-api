@@ -20,6 +20,7 @@ class FakeChatApi:
         modes: dict[str, ModeDemand] | None = None,
     ) -> None:
         self.calls: list[tuple[str, str]] = []
+        self.statuses: list[tuple] = []
         self.modes: dict[str, str] = {}
         self._phase = phase
         self._demand = Demand(waiting=waiting, hunting=hunting, modes=modes or {})
@@ -39,6 +40,10 @@ class FakeChatApi:
 
     async def attach(self, account: str) -> bool:
         self.calls.append(("attach", account))
+        return True
+
+    async def status(self, account: str, mode: str | None = None, *, error: str | None = None, clear: bool = False) -> bool:
+        self.statuses.append((account, mode, error, clear))
         return True
 
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, Depends, status
 
 from app.deps import Chat, EnginePeer, require_engine
-from app.schemas import EngineAttachOut, EngineDemandOut, SearchIn, StateOut
+from app.schemas import EngineAttachOut, EngineDemandOut, EngineStatusIn, SearchIn, StateOut
 
 router = APIRouter(
     prefix="/engine",
@@ -34,6 +34,16 @@ async def hunt(engine: EnginePeer, chat: Chat, body: SearchIn | None = Body(defa
     Тело `{"mode": "normal" | "adult"}` — режим аккаунта; без тела `normal`.
     """
     return await chat.engine_hunt(engine, body.mode if body else "normal")
+
+
+@router.post(
+    "/{account}/status",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Мост сообщает режим и последнюю ошибку аккаунта",
+)
+async def account_status(engine: EnginePeer, chat: Chat, body: EngineStatusIn) -> None:
+    """Нужен журналу инцидентов поиска. `error` — ошибка старта (409), лимит или пауза; `null` очищает."""
+    await chat.engine_status(engine, body.mode, body.error, "error" in body.model_fields_set)
 
 
 @router.post("/{account}/attach", summary="Отдать найденного собеседника человеку")
