@@ -17,7 +17,7 @@ async def engine_accounts(conn: AsyncConnection, presence_window_seconds: float)
         """
         SELECT p.bot_key, p.mode, p.last_error, p.last_error_at,
                p.last_hunt_normal_at, p.last_hunt_adult_at,
-               COALESCE(s.phase, 'idle') AS state
+               COALESCE(s.phase, 'idle') AS state, s.mode AS hunt_mode
         FROM engine_presence AS p
         LEFT JOIN chat_sessions AS s
                ON s.platform = %(engine)s AND s.bot_key = p.bot_key AND s.user_id = 1

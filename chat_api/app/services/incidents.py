@@ -13,6 +13,8 @@ from typing import Any
 QUICK_LEAVE_SECONDS = 10
 # Ошибка аккаунта моложе этого окна считается «аккаунт сейчас недоступен».
 ERROR_WINDOW_SECONDS = 600
+# «limited» держится дольше обычной ошибки, но не вечно: защита от залипшего статуса.
+LIMITED_WINDOW_SECONDS = 6 * 3600
 # Аккаунт без признаков жизни дольше этого окна считается отсутствующим.
 PRESENCE_WINDOW_SECONDS = 300
 
@@ -36,6 +38,8 @@ class AccountInfo:
     last_error_at: datetime | None = None
     last_hunt_normal_at: datetime | None = None
     last_hunt_adult_at: datetime | None = None
+    # Режим текущего поиска аккаунта (chat_sessions.mode), если он ищет.
+    hunt_mode: str | None = None
 
     def serves(self, mode: str) -> bool:
         return self.mode in (mode, "any")
@@ -47,9 +51,10 @@ class AccountInfo:
         """Недавняя ошибка (409, лимит, пауза) или лимит Telegram, о котором мост сообщил."""
         if not self.last_error:
             return False
-        if self.last_error.startswith("limited"):
-            return True
-        return self.last_error_at is not None and (now - self.last_error_at).total_seconds() <= error_window
+        if self.last_error_at is None:
+            return False
+        window = LIMITED_WINDOW_SECONDS if self.last_error.startswith("limited") else error_window
+        return (now - self.last_error_at).total_seconds() <= window
 
 
 def account_from_row(row: dict[str, Any]) -> AccountInfo:
@@ -63,6 +68,7 @@ def account_from_row(row: dict[str, Any]) -> AccountInfo:
         last_error_at=row.get("last_error_at"),
         last_hunt_normal_at=row.get("last_hunt_normal_at"),
         last_hunt_adult_at=row.get("last_hunt_adult_at"),
+        hunt_mode=row.get("hunt_mode"),
     )
 
 
@@ -89,7 +95,7 @@ def classify_incident(
         if hunted_at is None:
             continue
         # Аккаунт искал после того, как человек встал в очередь, либо ищет прямо сейчас (начал раньше).
-        if searching_since is None or hunted_at >= searching_since or account.state == "searching":
+        if searching_since is None or hunted_at >= searching_since or (account.state == "searching" and account.hunt_mode == mode):
             return "engine_searched_no_match"
     return "bridge_not_hunting"
 

@@ -64,7 +64,18 @@ class ClassifyTests(unittest.TestCase):
 
     def test_limited_is_unavailable_even_if_error_is_old(self) -> None:
         old = NOW - timedelta(hours=5)
+        old = NOW - timedelta(hours=5)
         self.assertEqual(classify([acc(last_error="limited", last_error_at=old)]), "all_accounts_unavailable")
+
+    def test_limited_older_than_six_hours_is_not_unavailable(self) -> None:
+        stale = NOW - timedelta(hours=7)
+        self.assertEqual(classify([acc(last_error="limited", last_error_at=stale)]), "bridge_not_hunting")
+
+    def test_searching_account_counts_only_for_its_hunt_mode(self) -> None:
+        before = SINCE - timedelta(minutes=5)
+        a = acc(mode="any", state="searching", hunt_mode="adult", last_hunt_normal_at=before, last_hunt_adult_at=before)
+        self.assertEqual(classify([a], mode="normal"), "bridge_not_hunting")
+        self.assertEqual(classify([a], mode="adult"), "engine_searched_no_match")
 
     def test_old_plain_error_is_not_unavailable(self) -> None:
         old = NOW - timedelta(hours=1)
@@ -93,7 +104,7 @@ class ClassifyTests(unittest.TestCase):
     def test_hunt_before_wait_does_not_count_unless_still_searching(self) -> None:
         before = SINCE - timedelta(minutes=5)
         self.assertEqual(classify([acc(last_hunt_normal_at=before)]), "bridge_not_hunting")
-        self.assertEqual(classify([acc(state="searching", last_hunt_normal_at=before)]), "engine_searched_no_match")
+        self.assertEqual(classify([acc(state="searching", hunt_mode="normal", last_hunt_normal_at=before)]), "engine_searched_no_match")
 
     def test_bridge_not_hunting_fallback(self) -> None:
         self.assertEqual(classify([acc()]), "bridge_not_hunting")
@@ -210,7 +221,9 @@ async def run(sessions, incidents, call):  # type: ignore[no-untyped-def]
         patch.object(chat_module, "repo", FakeSessions(sessions)),
         patch.object(chat_module, "incidents_repo", incidents),
     ):
-        return await call(service)
+        result = await call(service)
+        await service.wait_incidents()  # запись журнала идёт фоном
+        return result
 
 
 class RecordingTests(unittest.IsolatedAsyncioTestCase):
@@ -276,6 +289,20 @@ class RecordingTests(unittest.IsolatedAsyncioTestCase):
         inc = FakeIncidents()
         await run({ENGINE: searching()}, inc, lambda s: s.engine_hunt(ENGINE, "normal"))
         self.assertEqual(inc.inserted, [])
+
+    async def test_incident_is_written_in_background_task(self) -> None:
+        inc = FakeIncidents()
+        service = ChatService.__new__(ChatService)
+        service._pool = FakePool()  # type: ignore[attr-defined]
+        service._events = FakeEvents()  # type: ignore[attr-defined]
+        service._engine_enabled = False  # type: ignore[attr-defined]
+        service._fallback_after = 0.0  # type: ignore[attr-defined]
+        with patch.object(chat_module, "repo", FakeSessions({A: searching()})), patch.object(chat_module, "incidents_repo", inc):
+            await service.stop(A)
+            self.assertEqual(inc.inserted, [])  # ещё не успела: stop не ждёт запись
+            await service.wait_incidents()
+        self.assertEqual(len(inc.inserted), 1)
+        self.assertEqual(service._incident_tasks, set())
 
     async def test_journal_failure_does_not_break_stop(self) -> None:
         inc = FakeIncidents(fail=True)

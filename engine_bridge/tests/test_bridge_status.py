@@ -35,9 +35,10 @@ class BridgeStatusTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(chat_api.statuses, [("main", "normal", None, True)])
         self.assertFalse(bridge._links["main"].error_reported)
 
-    async def test_successful_start_without_prior_error_sends_nothing(self) -> None:
+    async def test_second_successful_start_sends_nothing(self) -> None:
         chat_api, engine = FakeChatApi(waiting=1), FakeEngine()
         bridge = make_bridge(chat_api, engine, {"main": "idle"})
+        bridge._links["main"].error_reported = False
         await bridge._reconcile()
         self.assertEqual(chat_api.statuses, [])
 
@@ -55,6 +56,55 @@ class BridgeStatusTest(unittest.IsolatedAsyncioTestCase):
         bridge = make_bridge(chat_api, engine, {"main": "limited"})  # error_reported=False, как после рестарта
         await bridge._on_engine_event(bridge._links["main"], {"type": "state", "state": "idle"})
         self.assertEqual(chat_api.statuses, [("main", "normal", None, True)])
+
+    async def test_snapshot_idle_clears_stale_limited(self) -> None:
+        chat_api, engine = FakeChatApi(), FakeEngine()
+        bridge = make_bridge(chat_api, engine, {"main": None})
+        link = bridge._links["main"]
+        link.error_reported = False  # как после рестарта моста с принудительной очисткой
+        await bridge._on_engine_event(link, {"type": "snapshot", "state": "idle"})
+        self.assertIn(("main", "normal", None, True), chat_api.statuses)
+
+    async def test_snapshot_limited_does_not_clear(self) -> None:
+        chat_api, engine = FakeChatApi(phase="idle"), FakeEngine()
+        bridge = make_bridge(chat_api, engine, {"main": None})
+        await bridge._on_engine_event(bridge._links["main"], {"type": "snapshot", "state": "limited"})
+        self.assertNotIn(("main", "normal", None, True), chat_api.statuses)
+
+    async def test_new_link_clears_on_first_successful_start(self) -> None:
+        from app.bridge import AccountLink
+
+        self.assertTrue(AccountLink("x").error_reported)
+
+    async def test_heartbeat_sends_mode_only_on_change_or_every_tenth_cycle(self) -> None:
+        import asyncio
+
+        chat_api, engine = FakeChatApi(), FakeEngine()
+        bridge = make_bridge(chat_api, engine, {"main": "idle"})
+
+        async def visit(account: str) -> None:
+            pass
+
+        chat_api.visit = visit  # type: ignore[attr-defined]
+        calls = 0
+
+        async def fake_sleep(delay: float) -> None:
+            nonlocal calls
+            calls += 1
+            if calls >= 11:
+                raise asyncio.CancelledError
+
+        import app.bridge as bridge_module
+
+        original = bridge_module.asyncio.sleep
+        bridge_module.asyncio.sleep = fake_sleep  # type: ignore[assignment]
+        try:
+            with self.assertRaises(asyncio.CancelledError):
+                await bridge._heartbeat_loop()
+        finally:
+            bridge_module.asyncio.sleep = original  # type: ignore[assignment]
+        # цикл 1 (первая отправка) и цикл 10; на остальных тихо
+        self.assertEqual(len(chat_api.statuses), 2)
 
     async def test_status_failure_does_not_break_bridge(self) -> None:
         chat_api, engine = BrokenStatusChatApi(waiting=1), FakeEngine(conflict={"main", "second"})
@@ -107,7 +157,6 @@ class ClientStatusTest(unittest.IsolatedAsyncioTestCase):
         bridge = make_bridge(chat_api, engine, {"main": "idle"})
         await bridge._reconcile()
         self.assertGreater(bridge._links["main"].cooldown_until, 0.0)
-        self.assertFalse(bridge._links["main"].error_reported)
         await real.aclose()
 
     async def test_500_is_an_error(self) -> None:

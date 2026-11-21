@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -92,6 +93,7 @@ class ChatService:
         self._fallback_after = settings.engine_fallback_after_seconds
         self._online_window = settings.stats_online_window_seconds
         self._stats: tuple[float, StatsOut] | None = None
+        self._incident_tasks: set[asyncio.Task[None]] = set()
 
     @asynccontextmanager
     async def _locked(self) -> AsyncIterator[AsyncConnection]:
@@ -564,7 +566,20 @@ class ChatService:
             )
 
     async def _record_incidents(self, searches: list[ClosedSearch]) -> None:
-        """Пишет журнал инцидентов после коммита стопа. Любой сбой только логируется: стоп уже выполнен."""
+        """Запись журнала идёт фоном после коммита стопа: ответ человеку её не ждёт, сбой только логируется."""
+        if not searches:
+            return
+        task = asyncio.create_task(self._record_incidents_now(list(searches)))
+        tasks = self.__dict__.setdefault("_incident_tasks", set())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    async def wait_incidents(self) -> None:
+        """Дожидается фоновых записей (остановка сервиса, тесты)."""
+        if self.__dict__.get("_incident_tasks"):
+            await asyncio.gather(*list(self._incident_tasks), return_exceptions=True)
+
+    async def _record_incidents_now(self, searches: list[ClosedSearch]) -> None:
         for closed in searches:
             try:
                 await self._record_incident(closed)

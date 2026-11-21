@@ -83,6 +83,7 @@ class SearchIncidentsDbTest(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.api.aclose)
 
     async def rows(self, query="SELECT * FROM search_incidents ORDER BY id", args=()):
+        await self.chat.wait_incidents()
         async with self.pool.connection() as conn:
             cursor = await conn.execute(query, args)
             return await cursor.fetchall()

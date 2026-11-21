@@ -30,6 +30,9 @@ _RECONNECT_DELAY_SECONDS = 3.0
 # Аккаунт, на котором chat-engine ответил 409 при старте, не берём в поиск эту минуту.
 _CONFLICT_COOLDOWN_SECONDS = 60.0
 
+# Режим аккаунта повторно сообщаем раз в столько циклов heartbeat (на случай перезапуска Chat API).
+_MODE_REPORT_EVERY_CYCLES = 10
+
 _MEDIA_LABELS = {
     "photo": "[фото]",
     "video": "[видео]",
@@ -94,7 +97,9 @@ class AccountLink:
     # Момент (loop.time()), до которого аккаунт не берём в поиск после 409.
     cooldown_until: float = 0.0
     # Chat API хранит последнюю ошибку аккаунта (409, лимит); после успешного старта её нужно очистить.
-    error_reported: bool = False
+    error_reported: bool = True
+    # Режим, который Chat API уже получил; None — ещё не отправляли.
+    reported_mode: str | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task[None] | None = None
 
@@ -209,6 +214,9 @@ class Bridge:
         state = event.get("state")
         if kind == "snapshot":
             link.state = state
+            if state != "limited":
+                # Мост мог перезапуститься: «limited» в Chat API осталось от прошлого лимита, сбрасываем всегда.
+                await self._report_status(link, clear=True, force=True)
             await self._sync(link)
             return
         if kind == "state":
@@ -406,6 +414,7 @@ class Bridge:
             return
         if not stored:
             return  # старый Chat API без маршрута: ничего не сохранено
+        link.reported_mode = link.mode
         if error is not None:
             link.error_reported = True
         elif clear:
@@ -517,7 +526,9 @@ class Bridge:
             logger.info("Аккаунт %s ищет собеседника для очереди (режим %s)", link.id, hunt_mode)
 
     async def _heartbeat_loop(self) -> None:
+        cycle = 0
         while True:
+            cycle += 1
             for link in list(self._links.values()):
                 if link.state is None:
                     continue
@@ -526,5 +537,6 @@ class Bridge:
                 except ChatApiError as exc:
                     logger.warning("Не отметил визит аккаунта %s: %s", link.id, exc)
                 # Режим аккаунта для журнала инцидентов: Chat API мог перезапуститься и забыть его.
-                await self._report_status(link)
+                if link.reported_mode != link.mode or cycle % _MODE_REPORT_EVERY_CYCLES == 0:
+                    await self._report_status(link)
             await asyncio.sleep(self._heartbeat)
