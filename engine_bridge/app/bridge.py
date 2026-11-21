@@ -85,6 +85,8 @@ class AccountLink:
     id: str
     # Режим аккаунта из chat-engine: normal или adult. Аккаунт ищет собеседников только своего режима.
     mode: str = "normal"
+    # Режим поиска, который аккаунт выполняет сейчас (normal/adult). Для any-аккаунта выбирается при старте поиска.
+    hunt_mode: str | None = None
     # Состояние в chat-engine. None, пока WebSocket не прислал snapshot.
     state: str | None = None
     # После ухода собеседника в chat-engine ещё приходят реклама и опрос — их не пересылаем.
@@ -393,6 +395,7 @@ class Bridge:
 
     async def _stop_human_side(self, link: AccountLink) -> None:
         """Снимает аккаунт в Chat API. Человек в паре с ним получит partner_left."""
+        link.hunt_mode = None
         try:
             await self._chat_api.stop(link.id)
         except ChatApiError as exc:
@@ -420,24 +423,34 @@ class Bridge:
                 candidates = [
                     link
                     for link in self._links.values()
-                    if link.mode == mode and link.state == "idle" and link.cooldown_until <= now
+                    if link.mode in (mode, "any") and link.state == "idle" and link.cooldown_until <= now
                 ]
+                # Свободный any-аккаунт берётся для режима, который обработан первым; повторно idle не будет.
+                candidates.sort(key=lambda link: link.mode == "any")  # сначала выделенные аккаунты режима
                 for link in candidates[:need]:
-                    await self._start_hunt(link)
+                    await self._start_hunt(link, mode)
             elif need < 0:
-                searching = [link for link in self._links.values() if link.mode == mode and link.state == "searching"]
+                searching = [link for link in self._links.values() if self._search_mode(link) == mode and link.state == "searching"]
                 for link in searching[:-need]:
                     async with link.lock:
                         if link.state == "searching":
                             logger.info("Аккаунт %s больше не нужен, поиск отменён", link.id)
                             await self._stop_engine(link)
 
-    async def _start_hunt(self, link: AccountLink) -> None:
+    @staticmethod
+    def _search_mode(link: AccountLink) -> str:
+        """Фактический режим поиска: у any-аккаунта — тот, что выбран при старте поиска."""
+        if link.mode != "any":
+            return link.mode
+        return link.hunt_mode or "normal"
+
+    async def _start_hunt(self, link: AccountLink, mode: str | None = None) -> None:
         async with link.lock:
             if link.state != "idle":
                 return
+            hunt_mode = mode if mode in ("normal", "adult") else self._search_mode(link)
             try:
-                await self._chat_api.hunt(link.id, link.mode)
+                await self._chat_api.hunt(link.id, hunt_mode)
             except ChatApiError as exc:
                 logger.warning("Не отметил поиск аккаунта %s: %s", link.id, exc)
                 return
@@ -459,8 +472,9 @@ class Bridge:
                 await self._stop_human_side(link)
                 return
             link.closing = False
+            link.hunt_mode = hunt_mode
             link.state = "searching"
-            logger.info("Аккаунт %s ищет собеседника для очереди", link.id)
+            logger.info("Аккаунт %s ищет собеседника для очереди (режим %s)", link.id, hunt_mode)
 
     async def _heartbeat_loop(self) -> None:
         while True:

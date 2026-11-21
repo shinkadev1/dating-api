@@ -30,12 +30,12 @@ class EngineAccount:
     state: str | None
     # Конец лимита аккаунта (ISO datetime). Старый chat-engine поле не присылает.
     limited_until: str | None = None
-    # normal или adult. Старый chat-engine поле не присылает — это normal.
+    # normal, adult или any (берёт любой поиск). Старый chat-engine поле не присылает — это normal.
     mode: str = "normal"
 
 
 def _mode(value: object) -> str:
-    return "adult" if value == "adult" else "normal"
+    return value if value in ("adult", "any") else "normal"  # type: ignore[return-value]
 
 
 class EngineClient:
