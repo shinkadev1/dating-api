@@ -75,8 +75,8 @@ services:
       CHANNEL_TOKEN_KEY: ${CHANNEL_TOKEN_KEY:-}
       ENGINE_FALLBACK_AFTER_SECONDS: ${ENGINE_FALLBACK_AFTER_SECONDS:-0}
       STATS_ONLINE_WINDOW_SECONDS: ${STATS_ONLINE_WINDOW_SECONDS:-300}
-      # Ежедневная массовая рассылка-промо (vk/tg, 19-21 МСК). Включена; false - выключить.
-      DAILY_PROMO_ENABLED: ${DAILY_PROMO_ENABLED:-true}
+      # Ежедневная массовая рассылка-промо (vk/tg, 19-21 МСК). Выключена до указаний пользователя; true - включить.
+      DAILY_PROMO_ENABLED: ${DAILY_PROMO_ENABLED:-false}
       # Автозакрытие молчащих диалогов: через сколько минут (0 - выкл.) и с какого простоя в часах закрывать без уведомления.
       DIALOG_INACTIVITY_MINUTES: ${DIALOG_INACTIVITY_MINUTES:-30}
       DIALOG_INACTIVITY_SILENT_HOURS: ${DIALOG_INACTIVITY_SILENT_HOURS:-24}
